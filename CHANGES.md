@@ -23,7 +23,9 @@ This file records every change made to it. Update it with each change.
 | Latency emulation | none | `latency_profile` / `emulated_latency_ms`: frames take as long as on the target platform |
 | Run output | topics only | also CSV + `run_info.json` (`run_output_dir`), format of `run_output.py` |
 | Build | Isaac ROS container | `docker/Dockerfile` (ROS 2 Lyrical, Ubuntu 24.04, CUDA 13) |
-| Launch files | Isaac Sim, RealSense, ZED, multi-camera, core | standalone node, `cam2_stereo_imu.launch.py` |
+| Configuration | launch parameters + remappings + `static_transform_publisher` | YAML profiles (`profile`): cameras, topics, frames, IMU, depth, extrinsics with source, mode |
+| Modes | 0, 1, 2 | same (multicamera, inertial, rgbd); profiles for mono and multisensor rejected with a clear message |
+| Launch files | Isaac Sim, RealSense, ZED, multi-camera, core | standalone node, `slam.launch.py profile:=...` |
 | Tests | integration tests on NVIDIA r2b bags | unit tests only (sequencer, vendored isaac_common) |
 
 ## Log
@@ -127,6 +129,29 @@ This file records every change made to it. Update it with each change.
   invalid parameter); simulated online replay of `building_in_108` with the Jetson profile
   (no drops: median 4.7 ms per frame on the Orin Nano) and with 100 ms per frame (223 of 300
   frames processed).
+
+**Camera layout profiles** (`e2765e3`)
+- YAML profiles in `pq_cuvslam/profiles/` (format in `profiles/README.md`): cameras with
+  topics and optical frames, IMU with the noise model and its source/date, aligned depth,
+  extrinsics missing from the data TF with their source/date, IR emitter state, cuVSLAM mode,
+  other node parameters.
+- Parameter `profile` (installed name or path): at `configure` the profile is loaded with
+  yaml-cpp, checked, and turned into node parameters; subscriptions use its topics (no
+  remapping). Errors name the file and the key; warnings for default IMU noise in inertial
+  mode, IR emitter on, ignored sections. Mono: rejected (not implemented in the node yet,
+  although cuVSLAM 15 supports it); multisensor: rejected (cuVSLAM >= 17).
+- Profile extrinsics go into the TF buffer of the node and are published on `/tf_static`, in
+  place of the `static_transform_publisher` between the two D455.
+- At tracker initialization the node checks that all optical frames and the IMU frame are
+  reachable from `base_frame`, and reports the missing ones while waiting (before, a missing
+  frame silently gave an identity transform after a 10 s timeout).
+- `run_info.json` records the profile.
+- Profiles: `cam2_stereo_imu`, `cam1_cam2_ir`, `cam2_rgbd`, `cam2_rgb_mono`, `cam2_rgbd_imu`.
+- `slam.launch.py` replaces `cam2_stereo_imu.launch.py`; `tools/run_bag.sh` uses it and plays
+  the topics of both cameras. New dependencies: `yaml_cpp_vendor` (yaml-cpp), `ament_index_cpp`.
+- Verified: `cam2_stereo_imu` gives byte-identical trajectories to the previous configuration;
+  `cam1_cam2_ir` on `loop_closure`: deterministic, rigid RMSE to ground truth 1.20 m (Isaac
+  ROS reference 1.18 m); `cam2_rgbd` on `building_in_108`: 0 frames lost, RMSE 0.80 m.
 
 ## Notes
 
