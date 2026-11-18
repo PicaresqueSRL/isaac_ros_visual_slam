@@ -33,7 +33,7 @@ int main(int argc, char * argv[])
   });
   auto visual_slam_node = std::make_shared<pq::visual_slam::VisualSlamNode>(
     visual_slam_options);
-  exec.add_node(visual_slam_node);
+  exec.add_node(visual_slam_node->get_node_base_interface());
 
   exec.spin();
 

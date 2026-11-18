@@ -148,6 +148,7 @@ ament_auto_add_library(
   src/visual_slam_node.cpp
   src/impl/cuvslam_ros_conversion.cpp
   src/impl/landmarks_vis_helper.cpp
+  src/impl/latency_emulator.cpp
   src/impl/localizer_vis_helper.cpp
   src/impl/pose_cache.cpp
   src/impl/posegraph_vis_helper.cpp

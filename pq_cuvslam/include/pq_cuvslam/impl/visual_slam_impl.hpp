@@ -39,6 +39,7 @@
 #include "cv_bridge/cv_bridge.hpp"
 #include "pq_cuvslam/third_party/isaac_common/messaging/message_stream_synchronizer.hpp"
 #include "pq_cuvslam/impl/landmarks_vis_helper.hpp"
+#include "pq_cuvslam/impl/latency_emulator.hpp"
 #include "pq_cuvslam/impl/limited_vector.hpp"
 #include "pq_cuvslam/impl/localizer_vis_helper.hpp"
 #include "pq_cuvslam/impl/message_stream_sequencer.hpp"
@@ -149,7 +150,8 @@ struct VisualSlamNode::VisualSlamImpl
   // Add one processed frame to the run output.
   void AddRunOutputFrame(
     int64_t timestamp_ns, bool tracked, const std::optional<tf2::Transform> & odom_pose,
-    const std::optional<tf2::Transform> & slam_pose, double track_time_ms);
+    const std::optional<tf2::Transform> & slam_pose, double track_time_ms,
+    double callback_time_ms);
 
   // Write the run output (see RunOutput) if enabled and not written yet.
   void WriteRunOutput();
@@ -229,6 +231,14 @@ struct VisualSlamNode::VisualSlamImpl
   bool run_output_written = false;
   // Description of the input, for run_info.json (e.g. bag path in replay).
   std::string run_input;
+  // Extra run_info.json entries (key, JSON value), e.g. replay statistics.
+  std::vector<std::pair<std::string, std::string>> run_info_extra;
+
+  // Emulation of the processing time of another platform; empty when disabled.
+  std::optional<LatencyEmulator> latency_emulator;
+  // Frames delayed by the emulation and total delay added.
+  uint64_t emulated_frames_delayed = 0;
+  double emulated_delay_total_ms = 0.0;
 
   // CUDA stream used for rosidl::Buffer ReadHandle synchronization between the producer
   // (upstream node) and cuVSLAM. Created in the constructor and destroyed in the destructor.

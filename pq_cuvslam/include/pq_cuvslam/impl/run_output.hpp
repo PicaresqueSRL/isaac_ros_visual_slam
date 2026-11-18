@@ -65,7 +65,8 @@ private:
 //   slam_poses.csv     final SLAM trajectory (GetAllSlamPoses at the end of the run, i.e.
 //                      optimized with the loop closures; with SLAM)
 //   status.csv         per frame: vo_state (1 tracked, 2 lost), Track() time, landmarks,
-//                      observations per camera
+//                      observations per camera, time of the whole frame callback (measured,
+//                      without the latency emulation)
 //   slam_metrics.csv   per frame: loop closure and pose graph optimization status (with SLAM)
 //   loop_closures.csv  last loop closure poses reported by SLAM, in the SLAM world frame
 //                      (rig, OpenCV axes)
@@ -86,7 +87,7 @@ public:
     const std::optional<tf2::Transform> & odom_pose,
     const std::optional<tf2::Transform> & slam_pose,
     double track_time_ms, size_t num_landmarks,
-    const std::vector<size_t> & observations_per_camera);
+    const std::vector<size_t> & observations_per_camera, double callback_time_ms);
 
   void AddSlamMetrics(int64_t timestamp_ns, const cuvslam::Slam::Metrics & metrics);
 

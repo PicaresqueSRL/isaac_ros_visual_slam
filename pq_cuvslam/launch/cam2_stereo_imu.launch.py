@@ -20,16 +20,26 @@ cam2 IR stereo + cam2 IMU (tracking_mode 1).
 Same node parameters as the Isaac ROS 5 reference runs
 (cuvslam_stereo_imu_cam2_bench.launch.py), for the parity test.
 
-Live / topics:  ros2 launch pq_cuvslam cam2_stereo_imu.launch.py
-Bag replay:     ros2 launch pq_cuvslam cam2_stereo_imu.launch.py bag:=<bag> run_output_dir:=<dir>
+Live / topics:     ros2 launch pq_cuvslam cam2_stereo_imu.launch.py
+Bag replay:        ... cam2_stereo_imu.launch.py bag:=<bag> run_output_dir:=<dir>
+Simulated online:  ... cam2_stereo_imu.launch.py bag:=<bag> rate:=1.0 latency_profile:=<csv>
 
 Launch arguments
 ----------------
 bag
-    Bag folder. If set, the bag is replayed by pq_cuvslam_replay (every frame processed, as
-    fast as possible) instead of subscribing to the topics.
+    Bag folder. If set, the bag is replayed by pq_cuvslam_replay instead of subscribing to
+    the topics.
+rate
+    0 (default): deterministic replay, every frame processed, as fast as possible.
+    R > 0: simulated online replay at R times the recorded speed; frames that are not
+    processed in time are dropped by keep-last queues, as with live subscriptions.
 processing_mode
-    realtime | offline. Default: offline with bag, realtime otherwise.
+    realtime | offline. Default: offline for the deterministic replay, realtime otherwise.
+latency_profile
+    status.csv measured on the target platform (e.g. Jetson): each frame takes at least the
+    time measured there. Empty = off.
+emulated_latency_ms
+    Constant minimum time per frame in ms, when latency_profile is empty. 0 = off.
 run_output_dir
     If set, the CSV files and run_info.json are written there.
 max_frames
@@ -57,7 +67,8 @@ REMAPPINGS = [
 ]
 
 
-def node_parameters(enable_vis, processing_mode, run_output_dir):
+def node_parameters(enable_vis, processing_mode, run_output_dir, latency_profile,
+                    emulated_latency_ms):
     return {
         'tracking_mode': 1,
         'enable_image_denoising': False,
@@ -85,6 +96,8 @@ def node_parameters(enable_vis, processing_mode, run_output_dir):
         ],
         'processing_mode': processing_mode,
         'run_output_dir': run_output_dir,
+        'latency_profile': latency_profile,
+        'emulated_latency_ms': emulated_latency_ms,
     }
 
 
@@ -93,18 +106,22 @@ def launch_setup(context):
     run_output_dir = LaunchConfiguration('run_output_dir').perform(context)
     processing_mode = LaunchConfiguration('processing_mode').perform(context)
     max_frames = LaunchConfiguration('max_frames').perform(context)
+    rate = float(LaunchConfiguration('rate').perform(context))
+    latency_profile = LaunchConfiguration('latency_profile').perform(context)
+    emulated_latency_ms = float(LaunchConfiguration('emulated_latency_ms').perform(context))
     enable_vis = LaunchConfiguration('enable_vis').perform(context).lower() in ('1', 'true')
 
     if not processing_mode:
-        processing_mode = 'offline' if bag else 'realtime'
-    params = node_parameters(enable_vis, processing_mode, run_output_dir)
+        processing_mode = 'offline' if bag and rate == 0.0 else 'realtime'
+    params = node_parameters(enable_vis, processing_mode, run_output_dir, latency_profile,
+                             emulated_latency_ms)
 
     if bag:
         return [Node(
             package='pq_cuvslam',
             executable='pq_cuvslam_replay',
             name='visual_slam_node',
-            arguments=['--bag', bag, '--max-frames', max_frames],
+            arguments=['--bag', bag, '--rate', str(rate), '--max-frames', max_frames],
             parameters=[params],
             remappings=REMAPPINGS,
             output='screen',
@@ -133,6 +150,9 @@ def generate_launch_description():
         DeclareLaunchArgument('processing_mode', default_value=''),
         DeclareLaunchArgument('run_output_dir', default_value=''),
         DeclareLaunchArgument('max_frames', default_value='-1'),
+        DeclareLaunchArgument('rate', default_value='0.0'),
+        DeclareLaunchArgument('latency_profile', default_value=''),
+        DeclareLaunchArgument('emulated_latency_ms', default_value='0.0'),
         DeclareLaunchArgument('enable_vis', default_value='false'),
         OpaqueFunction(function=launch_setup),
     ])

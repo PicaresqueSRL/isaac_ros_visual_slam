@@ -59,6 +59,32 @@ docker run --rm --gpus all -v /path/to/bags:/bags:ro -v /path/to/runs:/out \
 stops after N frames. The output files (`odometry.csv`, `slam_poses.csv`, `run_info.json`, ...)
 have the format of `run_output.py` and can be compared with `compare_runs.py`.
 
+Simulated online replay: the bag is played at its recorded speed (`rate:=1.0`), the tracker
+runs in `realtime` mode and frames that are not processed in time are dropped by keep-last
+queues, as with live subscriptions. On the PC, `latency_profile:=<csv>` makes every frame
+take at least as long as on the Jetson (a `status.csv` of a Jetson run, or the `frames.csv`
+of the Isaac ROS benchmark); `emulated_latency_ms:=N` sets a constant time instead:
+
+```bash
+docker run --rm --gpus all -v /path/to/bags:/bags:ro -v /path/to/runs:/out -v /path/to/profiles:/p:ro \
+  pq_cuvslam:dev ros2 launch pq_cuvslam cam2_stereo_imu.launch.py \
+    bag:=/bags/<category>/<bag> rate:=1.0 latency_profile:=/p/frames.csv run_output_dir:=/out/<bag>
+```
+
+## Lifecycle
+
+The node is a lifecycle (managed) node. With `autostart:=true` (default) it configures and
+activates itself; otherwise, or to reconfigure it at runtime:
+
+```bash
+ros2 lifecycle get /visual_slam_node
+ros2 lifecycle set /visual_slam_node deactivate   # input ignored, tracker and map kept
+ros2 lifecycle set /visual_slam_node cleanup      # run output written, tracker destroyed
+ros2 param set /visual_slam_node <param> <value>  # applied at the next configure
+ros2 lifecycle set /visual_slam_node configure
+ros2 lifecycle set /visual_slam_node activate
+```
+
 ## Tests
 
 ```bash

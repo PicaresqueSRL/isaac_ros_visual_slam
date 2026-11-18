@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <thread>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -174,6 +175,17 @@ VisualSlamNode::VisualSlamImpl::VisualSlamImpl(VisualSlamNode & vslam_node)
 
   if (!node.run_output_dir_.empty()) {
     run_output = std::make_unique<RunOutput>(node.run_output_dir_, node.num_cameras_);
+  }
+
+  // Throws if the profile cannot be read: the configuration fails.
+  if (!node.latency_profile_.empty()) {
+    latency_emulator = LatencyEmulator::FromProfile(node.latency_profile_);
+  } else if (node.emulated_latency_ms_ > 0.0) {
+    latency_emulator = LatencyEmulator::Constant(node.emulated_latency_ms_);
+  }
+  if (latency_emulator) {
+    RCLCPP_INFO(
+      node.get_logger(), "Latency emulation: %s", latency_emulator->Describe().c_str());
   }
 
   sequencer.RegisterCallback(
@@ -745,6 +757,7 @@ void VisualSlamNode::VisualSlamImpl::UpdatePose(
     "VisualSlamNode::VisualSlamImpl::UpdatePose", CLR_MAGENTA);
   Stopwatch stopwatch;
   StopwatchScope ssw(stopwatch);
+  const auto callback_start = std::chrono::steady_clock::now();
 
   // Check for completed localization
   CheckLocalizationStatus();
@@ -1089,7 +1102,9 @@ void VisualSlamNode::VisualSlamImpl::UpdatePose(
   }
   if (run_output) {
     AddRunOutputFrame(latest_ts, vo_success, output_odom_pose, output_slam_pose,
-      track_execution_time * 1000.0);
+      track_execution_time * 1000.0,
+      std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - callback_start).count());
   }
 
   // Publish status.
@@ -1138,6 +1153,18 @@ void VisualSlamNode::VisualSlamImpl::UpdatePose(
   }
 
   last_track_ts = latest_ts;
+
+  // Latency emulation: the frame takes at least as long as on the target platform.
+  if (latency_emulator) {
+    const double elapsed_ms = std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - callback_start).count();
+    const double wait_ms = latency_emulator->TargetMs(latest_ts) - elapsed_ms;
+    if (wait_ms > 0.0) {
+      std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(wait_ms));
+      ++emulated_frames_delayed;
+      emulated_delay_total_ms += wait_ms;
+    }
+  }
 }
 
 
@@ -1344,7 +1371,8 @@ void VisualSlamNode::VisualSlamImpl::CheckLocalizationStatus()
 
 void VisualSlamNode::VisualSlamImpl::AddRunOutputFrame(
   int64_t timestamp_ns, bool tracked, const std::optional<tf2::Transform> & odom_pose,
-  const std::optional<tf2::Transform> & slam_pose, double track_time_ms)
+  const std::optional<tf2::Transform> & slam_pose, double track_time_ms,
+  double callback_time_ms)
 {
   // Observations and landmarks are available only when their export is enabled
   // (see CreateOdometryConfiguration).
@@ -1368,7 +1396,8 @@ void VisualSlamNode::VisualSlamImpl::AddRunOutputFrame(
   }
 
   run_output->AddFrame(
-    timestamp_ns, tracked, odom_pose, slam_pose, track_time_ms, num_landmarks, observations);
+    timestamp_ns, tracked, odom_pose, slam_pose, track_time_ms, num_landmarks, observations,
+    callback_time_ms);
 
   if (cuvslam_slam) {
     try {
@@ -1387,6 +1416,14 @@ void VisualSlamNode::VisualSlamImpl::WriteRunOutput()
     return;
   }
   run_output_written = true;
+  // Do not overwrite the output of a previous run with an empty one (e.g. a configure /
+  // cleanup cycle without input).
+  if (run_output->NumFrames() == 0) {
+    RCLCPP_INFO(
+      node.get_logger(), "No frame processed: run output not written to %s",
+      run_output->Directory().c_str());
+    return;
+  }
 
   int32_t major = 0, minor = 0, patch = 0;
   const std::string cuvslam_version(cuvslam::GetVersion(&major, &minor, &patch));
@@ -1435,6 +1472,19 @@ void VisualSlamNode::VisualSlamImpl::WriteRunOutput()
   .Add("imu_topic", node.GetImuTopic())
   .Add("base_frame", node.base_frame_)
   .Add("parameters", params);
+
+  if (latency_emulator) {
+    JsonObject emulation;
+    emulation.Add("description", latency_emulator->Describe())
+    .Add("frames_matched_by_timestamp", latency_emulator->Matched())
+    .Add("frames_drawn_from_profile", latency_emulator->Drawn())
+    .Add("frames_delayed", emulated_frames_delayed)
+    .Add("total_delay_s", emulated_delay_total_ms / 1000.0);
+    info.Add("latency_emulation", emulation);
+  }
+  for (const auto & [key, json] : run_info_extra) {
+    info.AddRaw(key, json);
+  }
 
   if (run_output->Write(cuvslam_slam.get(), info)) {
     RCLCPP_INFO(
