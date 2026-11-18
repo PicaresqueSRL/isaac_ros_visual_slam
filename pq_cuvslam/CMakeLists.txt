@@ -77,7 +77,7 @@ if(VSLAM_WITH_CUDA_BUFFER)
   list(APPEND VISUAL_SLAM_LIBRARIES ${cuda_buffer_TARGETS})
 endif()
 
-# cuNLS solver in cuVSLAM (requires CUDA >= 12.6, cuBLAS and cuSOLVER).
+# cuNLS solver in cuVSLAM (requires cuVSLAM >= 17, CUDA >= 12.6, cuBLAS and cuSOLVER).
 # OFF by default, as in the Isaac ROS node, for the parity test.
 option(USE_CUNLS "Build cuVSLAM with cuNLS support" OFF)
 
@@ -87,6 +87,15 @@ if(NOT EXISTS "${CUVSLAM_SOURCE_DIR}/CMakeLists.txt")
     "cuVSLAM source checkout missing at ${CUVSLAM_SOURCE_DIR}. "
     "Run `git submodule update --init --recursive "
     "ros_ws/src/isaac_ros_visual_slam/cuvslam`.")
+endif()
+
+# cuVSLAM version, from the VERSION file of the checked-out sources.
+file(READ "${CUVSLAM_SOURCE_DIR}/VERSION" CUVSLAM_VERSION)
+string(STRIP "${CUVSLAM_VERSION}" CUVSLAM_VERSION)
+message(STATUS "cuVSLAM version: ${CUVSLAM_VERSION}")
+if(USE_CUNLS AND CUVSLAM_VERSION VERSION_LESS 17.0.0)
+  message(FATAL_ERROR
+    "USE_CUNLS=ON requires cuVSLAM >= 17.0.0 (found ${CUVSLAM_VERSION})")
 endif()
 
 if(CMAKE_BUILD_TYPE)
@@ -187,9 +196,6 @@ if(BUILD_TESTING)
   target_include_directories(${PROJECT_NAME}_test_message_stream_sequencer PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
-  )
-  ament_target_dependencies(${PROJECT_NAME}_test_message_stream_sequencer
-    std_msgs
   )
 
   # Tests of the vendored isaac_common headers
