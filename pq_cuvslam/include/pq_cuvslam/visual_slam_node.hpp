@@ -25,6 +25,7 @@
 #include <thread>
 #include <atomic>
 
+#include "pq_cuvslam/impl/profile.hpp"
 #include "pq_cuvslam/impl/types.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp/qos.hpp"
@@ -136,6 +137,9 @@ private:
     rcl_interfaces::msg::ParameterDescriptor());
   // Declares (first call) and reads all parameters into the members below.
   void DeclareAndReadParameters();
+  // Loads the profile named by profile_name_, checks it and sets the node parameters it
+  // defines. Throws on error.
+  void ApplyProfile();
   // Checks the cuVSLAM version, the tracking mode and the GPU; throws on error.
   void CheckSetup();
   void CreateInterfaces();
@@ -146,6 +150,12 @@ private:
   // True in the active state: input is processed.
   std::atomic<bool> active_{false};
   rclcpp::TimerBase::SharedPtr autostart_timer_;
+
+  // Camera layout profile (parameter "profile"): name of an installed profile or path of a
+  // YAML file. When set, it defines the cameras, topics, frames, extrinsics and mode, and the
+  // parameters it lists; empty = configuration from the parameters and remappings only.
+  std::string profile_name_;
+  std::optional<Profile> profile_;
 
   // Parameters below are read at every configuration (see DeclareAndReadParameters).
 

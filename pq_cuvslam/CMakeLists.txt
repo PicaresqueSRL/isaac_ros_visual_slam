@@ -151,14 +151,17 @@ ament_auto_add_library(
   src/impl/latency_emulator.cpp
   src/impl/localizer_vis_helper.cpp
   src/impl/pose_cache.cpp
+  src/impl/profile.cpp
   src/impl/posegraph_vis_helper.cpp
   src/impl/qos.cpp
   src/impl/run_output.cpp
   src/impl/visual_slam_impl.cpp
   src/impl/viz_helper.cpp
 )
+find_package(yaml-cpp REQUIRED)
 target_link_libraries(visual_slam_node
   cuvslam
+  yaml-cpp::yaml-cpp
   Boost::thread
   Boost::chrono
   ${VISUAL_SLAM_LIBRARIES}
@@ -228,4 +231,4 @@ if(BUILD_TESTING)
   endforeach()
 endif()
 
-ament_auto_package(INSTALL_TO_SHARE launch rviz)
+ament_auto_package(INSTALL_TO_SHARE launch profiles rviz)

@@ -1,0 +1,49 @@
+# cam2 + cam1 IR stereo pairs, multicamera, no IMU (cuVSLAM supports the IMU with one stereo
+# pair only). Same node parameters as the Isaac ROS 5 reference runs
+# (cuvslam_stereo_cam1_cam2*.launch.py).
+name: cam1_cam2_ir
+description: cam2 (forward) and cam1 (down) infrared stereo pairs, multicamera odometry
+mode: multicamera
+base_frame: cam2_link
+
+cameras:
+  - name: cam2_ir1
+    image_topic: /cam2/infra1/image_rect_raw
+    camera_info_topic: /cam2/infra1/camera_info
+    optical_frame: cam2_infra1_optical_frame
+  - name: cam2_ir2
+    image_topic: /cam2/infra2/image_rect_raw
+    camera_info_topic: /cam2/infra2/camera_info
+    optical_frame: cam2_infra2_optical_frame
+  - name: cam1_ir1
+    image_topic: /cam1/infra1/image_rect_raw
+    camera_info_topic: /cam1/infra1/camera_info
+    optical_frame: cam1_infra1_optical_frame
+  - name: cam1_ir2
+    image_topic: /cam1/infra2/image_rect_raw
+    camera_info_topic: /cam1/infra2/camera_info
+    optical_frame: cam1_infra2_optical_frame
+
+# The bags have no TF between the two cameras (each D455 publishes its own tree).
+extrinsics:
+  - parent: cam2_link
+    child: cam1_link
+    translation: [-0.0134, 0.0, -0.0634]   # m
+    rotation_rpy: [0.0, 0.8604, 0.0]       # rad (pitch +49.3 deg)
+    source: >-
+      translation from the holder CAD (D455_HOLDER.stp); pitch estimated from the two
+      gyroscopes on the 17 bags
+    date: null
+
+hardware:
+  ir_emitter: false
+
+parameters:
+  rectified_images: true
+  enable_image_denoising: false
+  image_jitter_threshold_ms: 150.0
+  # The cameras are not hardware synchronized: their frames are 5-33 ms apart.
+  sync_matching_threshold_ms: 35.0
+  enable_localization_n_mapping: true
+  enable_ground_constraint_in_odometry: false
+  enable_ground_constraint_in_slam: false

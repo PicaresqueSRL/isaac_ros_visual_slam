@@ -2,7 +2,8 @@
 # Run pq_cuvslam on one bag at real-time speed and record its output topics.
 # Runs inside the pq_cuvslam container (ROS 2 and the workspace sourced).
 #
-# Usage: run_bag.sh <bag_dir> <out_dir> [launch_file] [launch args...]
+# Usage: run_bag.sh <bag_dir> <out_dir> [launch args...]
+#   e.g. run_bag.sh /bags/x /out/x profile:=cam1_cam2_ir run_output_dir:=/out/x/run
 #
 # Output in <out_dir>:
 #   bag/          MCAP recording of the cuVSLAM output topics
@@ -10,29 +11,37 @@
 #   record.log    ros2 bag record log
 #   play.log      ros2 bag play log
 #
-# Input and output topics are those of the Isaac ROS reference runs
-# (VRHealth_Challenge13/isaac_ros_5/launch/slam_cam2.sh, config cam2_stereo_imu).
+# The node runs with slam.launch.py (default profile cam2_stereo_imu). Played topics: IR,
+# IMU, RGB and aligned depth of both cameras and /tf_static (PLAY_TOPICS to change them).
+# Recorded topics: those of the Isaac ROS reference runs (slam_cam2.sh).
 
 set -u
 
 if [ $# -lt 2 ]; then
-  echo "Usage: $0 <bag_dir> <out_dir> [launch_file] [launch args...]" >&2
+  echo "Usage: $0 <bag_dir> <out_dir> [launch args...]" >&2
   exit 2
 fi
 
 BAG=$1
 OUT=$2
 shift 2
-LAUNCH=${1:-$(ros2 pkg prefix pq_cuvslam)/share/pq_cuvslam/launch/cam2_stereo_imu.launch.py}
-[ $# -gt 0 ] && shift
+LAUNCH=$(ros2 pkg prefix pq_cuvslam)/share/pq_cuvslam/launch/slam.launch.py
 LAUNCH_ARGS=("$@")
 
-PLAY_TOPICS=(
-  /cam2/infra1/image_rect_raw /cam2/infra1/camera_info
-  /cam2/infra2/image_rect_raw /cam2/infra2/camera_info
-  /cam2/imu
-  /tf_static
-)
+if [ -n "${PLAY_TOPICS:-}" ]; then
+  read -r -a PLAY_TOPICS <<< "$PLAY_TOPICS"
+else
+  PLAY_TOPICS=(/tf_static)
+  for cam in cam1 cam2; do
+    PLAY_TOPICS+=(
+      /$cam/infra1/image_rect_raw /$cam/infra1/camera_info
+      /$cam/infra2/image_rect_raw /$cam/infra2/camera_info
+      /$cam/imu
+      /$cam/color/image_raw /$cam/color/camera_info
+      /$cam/aligned_depth_to_color/image_raw /$cam/aligned_depth_to_color/camera_info
+    )
+  done
+fi
 RECORD_TOPICS=(
   /visual_slam/tracking/odometry
   /visual_slam/tracking/vo_path

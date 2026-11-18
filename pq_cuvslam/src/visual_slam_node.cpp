@@ -32,6 +32,7 @@
 #include "pq_cuvslam/impl/posegraph_vis_helper.hpp"
 #include "pq_cuvslam/impl/has_subscribers.hpp"
 #include "pq_cuvslam/impl/stopwatch.hpp"
+#include "ament_index_cpp/get_package_share_path.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
@@ -88,6 +89,13 @@ T VisualSlamNode::Param(
 
 void VisualSlamNode::DeclareAndReadParameters()
 {
+  {
+    rcl_interfaces::msg::ParameterDescriptor descriptor;
+    descriptor.description =
+      "Camera layout profile: name of an installed profile (share/pq_cuvslam/profiles) or path "
+      "of a YAML file. Empty = parameters and remappings only";
+    profile_name_ = Param<std::string>("profile", "", descriptor);
+  }
   // Functional Parameters:
   num_cameras_ = Param<int>("num_cameras", 2);
   num_input_masks_ = Param<int>("num_input_masks", 0);
@@ -257,11 +265,25 @@ void VisualSlamNode::CreateInterfaces()
   image_sub_options.use_intra_process_comm = rclcpp::IntraProcessSetting::Enable;
   image_sub_options.acceptable_buffer_backends = "any";
 
+  // Input topics: from the profile, or visual_slam/... (to be remapped) without profile.
+  const auto image_topic = [this](uint i) {
+      return profile_ ? profile_->cameras.at(i).image_topic : "visual_slam/image_" +
+             std::to_string(i);
+    };
+  const auto camera_info_topic = [this](uint i) {
+      return profile_ ? profile_->cameras.at(i).camera_info_topic :
+             "visual_slam/camera_info_" + std::to_string(i);
+    };
+  const std::string depth_topic = profile_ && profile_->depth ? profile_->depth->topic :
+    "visual_slam/depth_0";
+  const std::string imu_topic = profile_ && profile_->imu ? profile_->imu->topic :
+    "visual_slam/imu";
+
   image_subs_.clear();
   for (uint i = 0; i < num_cameras_; ++i) {
     image_subs_.push_back(
       create_subscription<sensor_msgs::msg::Image>(
-        "visual_slam/image_" + std::to_string(i), image_qos_,
+        image_topic(i), image_qos_,
         [this, i](const ImageType & msg) {return CallbackImage(i, msg);},
         image_sub_options));
   }
@@ -283,7 +305,7 @@ void VisualSlamNode::CreateInterfaces()
     const uint cb_index = num_cameras_ + num_input_masks_;
     depth_image_subs_.push_back(
       create_subscription<sensor_msgs::msg::Image>(
-        "visual_slam/depth_0", image_qos_,
+        depth_topic, image_qos_,
         [this, cb_index](const ImageType & msg) {return CallbackImage(cb_index, msg);},
         image_sub_options));
   }
@@ -292,7 +314,7 @@ void VisualSlamNode::CreateInterfaces()
   for (uint i = 0; i < num_cameras_; ++i) {
     camera_info_subs_.push_back(
       create_subscription<CameraInfoType>(
-        "visual_slam/camera_info_" + std::to_string(i), image_qos_,
+        camera_info_topic(i), image_qos_,
         [this, i](const CameraInfoType::ConstSharedPtr & msg) {
           return CallbackCameraInfo(i, msg);
         }));
@@ -301,7 +323,7 @@ void VisualSlamNode::CreateInterfaces()
   imu_sub_.reset();
   if (tracking_mode_ == static_cast<int>(TrackingMode::VIO)) {
     imu_sub_ = create_subscription<ImuType>(
-      "visual_slam/imu", imu_qos_,
+      imu_topic, imu_qos_,
       std::bind(&VisualSlamNode::CallbackImu, this, std::placeholders::_1));
   }
 
@@ -447,11 +469,102 @@ void VisualSlamNode::TearDown()
   DestroyInterfaces();
 }
 
+namespace
+{
+
+// Converts a profile value to a parameter of the type the node declared.
+rclcpp::Parameter ToParameter(
+  const std::string & name, const YAML::Node & value, rclcpp::ParameterType type)
+{
+  try {
+    switch (type) {
+      case rclcpp::ParameterType::PARAMETER_BOOL:
+        return rclcpp::Parameter(name, value.as<bool>());
+      case rclcpp::ParameterType::PARAMETER_INTEGER:
+        return rclcpp::Parameter(name, value.as<int64_t>());
+      case rclcpp::ParameterType::PARAMETER_DOUBLE:
+        return rclcpp::Parameter(name, value.as<double>());
+      case rclcpp::ParameterType::PARAMETER_STRING:
+        return rclcpp::Parameter(name, value.as<std::string>());
+      case rclcpp::ParameterType::PARAMETER_STRING_ARRAY:
+        return rclcpp::Parameter(name, value.as<std::vector<std::string>>());
+      case rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY:
+        return rclcpp::Parameter(name, value.as<std::vector<double>>());
+      case rclcpp::ParameterType::PARAMETER_INTEGER_ARRAY:
+        return rclcpp::Parameter(name, value.as<std::vector<int64_t>>());
+      default:
+        break;
+    }
+  } catch (const YAML::Exception & e) {
+    throw ProfileError(
+            "parameter " + name + ": value of the wrong type for the node (" + e.what() + ")");
+  }
+  throw ProfileError("parameter " + name + ": type not supported in profiles");
+}
+
+}  // namespace
+
+void VisualSlamNode::ApplyProfile()
+{
+  profile_.reset();
+  const std::string share = ament_index_cpp::get_package_share_path("pq_cuvslam").string();
+  const std::string path = ResolveProfilePath(profile_name_, share);
+  Profile profile = LoadProfile(path);
+
+  int32_t major = 0, minor = 0, patch = 0;
+  cuvslam::GetVersion(&major, &minor, &patch);
+  const ProfileCheck check = CheckProfile(profile, major);
+  for (const auto & warning : check.warnings) {
+    RCLCPP_WARN(get_logger(), "Profile %s: %s", profile.name.c_str(), warning.c_str());
+  }
+  if (!check.errors.empty()) {
+    std::string message = "profile " + path + " is not valid:";
+    for (const auto & error : check.errors) {
+      message += "\n  - " + error;
+    }
+    throw ProfileError(message);
+  }
+
+  std::vector<rclcpp::Parameter> parameters;
+  for (const auto & [name, value] : ProfileParameters(profile)) {
+    if (!has_parameter(name)) {
+      throw ProfileError(path + ": parameters." + name + ": unknown node parameter");
+    }
+    parameters.push_back(ToParameter(name, value, get_parameter(name).get_type()));
+  }
+  for (const auto & result : set_parameters(parameters)) {
+    if (!result.successful) {
+      throw ProfileError(path + ": cannot set the parameters: " + result.reason);
+    }
+  }
+
+  RCLCPP_INFO(
+    get_logger(), "Profile %s (%s): mode %s, %zu cameras%s%s, %zu extrinsics", profile.name.c_str(),
+    path.c_str(), profile.mode_name.c_str(), profile.cameras.size(), profile.imu ? ", IMU" : "",
+    profile.depth ? ", depth" : "", profile.extrinsics.size());
+  for (const auto & t : profile.extrinsics) {
+    RCLCPP_INFO(
+      get_logger(), "  extrinsic %s -> %s: %s%s", t.parent.c_str(), t.child.c_str(),
+      t.source.c_str(), t.date.empty() ? "" : (" (" + t.date + ")").c_str());
+  }
+  if (profile.ir_emitter) {
+    RCLCPP_INFO(
+      get_logger(), "  IR emitter during the recording: %s", *profile.ir_emitter ? "on" : "off");
+  }
+  profile_ = std::move(profile);
+}
+
 CallbackReturn VisualSlamNode::on_configure(const rclcpp_lifecycle::State &)
 {
   RCLCPP_INFO(get_logger(), "Configuring");
   try {
     DeclareAndReadParameters();
+    profile_.reset();
+    if (!profile_name_.empty()) {
+      ApplyProfile();
+      // Read again the parameters set by the profile.
+      DeclareAndReadParameters();
+    }
     CheckSetup();
     CreateInterfaces();
     impl_ = std::make_unique<VisualSlamImpl>(*this);

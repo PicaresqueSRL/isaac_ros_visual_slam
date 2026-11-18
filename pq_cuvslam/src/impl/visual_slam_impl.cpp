@@ -177,6 +177,22 @@ VisualSlamNode::VisualSlamImpl::VisualSlamImpl(VisualSlamNode & vslam_node)
     run_output = std::make_unique<RunOutput>(node.run_output_dir_, node.num_cameras_);
   }
 
+  // Extrinsics of the profile (transforms missing from the TF of the data, e.g. between two
+  // cameras): added to the TF buffer used to build the rig, and published on /tf_static.
+  if (node.profile_ && !node.profile_->extrinsics.empty()) {
+    std::vector<geometry_msgs::msg::TransformStamped> transforms;
+    for (const auto & t : node.profile_->extrinsics) {
+      geometry_msgs::msg::TransformStamped msg;
+      msg.header.stamp = node.get_clock()->now();
+      msg.header.frame_id = t.parent;
+      msg.child_frame_id = t.child;
+      msg.transform = tf2::toMsg(t.transform);
+      tf_buffer->setTransform(msg, "profile", true);
+      transforms.push_back(msg);
+    }
+    tf_static_publisher->sendTransform(transforms);
+  }
+
   // Throws if the profile cannot be read: the configuration fails.
   if (!node.latency_profile_.empty()) {
     latency_emulator = LatencyEmulator::FromProfile(node.latency_profile_);
@@ -259,6 +275,30 @@ void VisualSlamNode::VisualSlamImpl::Initialize()
     camera_optical_frames.reserve(node.num_cameras_);
     for (const auto & [idx, camera_info_msg] : initial_camera_info_messages) {
       camera_optical_frames.push_back(camera_info_msg.value()->header.frame_id);
+    }
+  }
+
+  // Every frame needed by the rig must be in the TF tree (bag /tf_static, live TF or profile
+  // extrinsics). Otherwise wait: initialization is retried with the next camera info.
+  {
+    std::vector<std::string> needed = camera_optical_frames;
+    if (node.tracking_mode_ == static_cast<int>(TrackingMode::VIO)) {
+      needed.push_back(
+        !node.imu_frame_.empty() ? node.imu_frame_ :
+        initial_imu_message.value()->header.frame_id);
+    }
+    std::string missing;
+    for (const auto & frame : needed) {
+      if (!tf_buffer->canTransform(base_frame, frame, tf2::TimePointZero)) {
+        missing += (missing.empty() ? "" : ", ") + frame;
+      }
+    }
+    if (!missing.empty()) {
+      RCLCPP_WARN_THROTTLE(
+        node.get_logger(), *node.get_clock(), 2000,
+        "Waiting for TF from %s to: %s. The frames must come from the data (/tf_static) or "
+        "from the extrinsics of the profile.", base_frame.c_str(), missing.c_str());
+      return;
     }
   }
 
@@ -1481,6 +1521,31 @@ void VisualSlamNode::VisualSlamImpl::WriteRunOutput()
     .Add("frames_delayed", emulated_frames_delayed)
     .Add("total_delay_s", emulated_delay_total_ms / 1000.0);
     info.Add("latency_emulation", emulation);
+  }
+  if (node.profile_) {
+    const Profile & p = *node.profile_;
+    JsonObject profile;
+    profile.Add("name", p.name).Add("path", p.path).Add("mode", p.mode_name);
+    std::vector<std::string> cameras;
+    for (const auto & c : p.cameras) {
+      cameras.push_back(c.name);
+    }
+    profile.Add("cameras", cameras);
+    if (p.imu) {
+      JsonObject imu;
+      imu.Add("noise_source", p.imu->noise_source).Add("noise_date", p.imu->noise_date);
+      profile.Add("imu", imu);
+    }
+    std::vector<std::string> extrinsics;
+    for (const auto & t : p.extrinsics) {
+      const std::string date = t.date.empty() ? "" : " (" + t.date + ")";
+      extrinsics.push_back(t.parent + " -> " + t.child + ": " + t.source + date);
+    }
+    profile.Add("extrinsics", extrinsics);
+    if (p.ir_emitter) {
+      profile.Add("ir_emitter", *p.ir_emitter);
+    }
+    info.Add("profile", profile);
   }
   for (const auto & [key, json] : run_info_extra) {
     info.AddRaw(key, json);

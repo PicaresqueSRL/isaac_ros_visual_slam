@@ -51,7 +51,7 @@ Deterministic replay of a bag (every frame processed, as fast as possible, track
 
 ```bash
 docker run --rm --gpus all -v /path/to/bags:/bags:ro -v /path/to/runs:/out \
-  pq_cuvslam:dev ros2 launch pq_cuvslam cam2_stereo_imu.launch.py \
+  pq_cuvslam:dev ros2 launch pq_cuvslam slam.launch.py profile:=cam2_stereo_imu \
     bag:=/bags/<category>/<bag> run_output_dir:=/out/<bag>
 ```
 
@@ -67,7 +67,7 @@ of the Isaac ROS benchmark); `emulated_latency_ms:=N` sets a constant time inste
 
 ```bash
 docker run --rm --gpus all -v /path/to/bags:/bags:ro -v /path/to/runs:/out -v /path/to/profiles:/p:ro \
-  pq_cuvslam:dev ros2 launch pq_cuvslam cam2_stereo_imu.launch.py \
+  pq_cuvslam:dev ros2 launch pq_cuvslam slam.launch.py profile:=cam2_stereo_imu \
     bag:=/bags/<category>/<bag> rate:=1.0 latency_profile:=/p/frames.csv run_output_dir:=/out/<bag>
 ```
 

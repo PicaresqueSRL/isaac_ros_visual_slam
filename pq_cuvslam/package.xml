@@ -36,6 +36,7 @@ reserved.
   <depend>geometry_msgs</depend>
   <depend>isaac_ros_visual_slam_interfaces</depend>
   <depend>nav_msgs</depend>
+  <depend>ament_index_cpp</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_components</depend>
   <depend>rclcpp_lifecycle</depend>
@@ -47,6 +48,7 @@ reserved.
   <depend>tf2_msgs</depend>
   <depend>tf2_ros</depend>
   <depend>visualization_msgs</depend>
+  <depend>yaml_cpp_vendor</depend>
   <depend>boost</depend>
 
   <!-- MCAP storage plugin for the bag replay -->
