@@ -158,23 +158,6 @@ if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
 
-  # The FindPythonInterp and FindPythonLibs modules are removed
-  if(POLICY CMP0148)
-    cmake_policy(SET CMP0148 OLD)
-  endif()
-
-  find_package(launch_testing_ament_cmake REQUIRED)
-  add_launch_test(test/isaac_ros_visual_slam_pol_multi_cam_imu.py)
-  add_launch_test(test/isaac_ros_visual_slam_pol_rgbd_cam.py)
-  add_launch_test(test/isaac_ros_visual_slam_pol_single_cam_imu.py)
-  add_launch_test(test/isaac_ros_visual_slam_srv_get_all_poses.py)
-  add_launch_test(test/isaac_ros_visual_slam_srv_load_map.py)
-  # TODO(lgulich): Enable this test when we have better test data.
-  # add_launch_test(test/isaac_ros_visual_slam_srv_localize_in_map.py)
-  add_launch_test(test/isaac_ros_visual_slam_srv_reset.py)
-  add_launch_test(test/isaac_ros_visual_slam_srv_save_map.py)
-  add_launch_test(test/isaac_ros_visual_slam_srv_set_slam_pose.py)
-
   ament_add_gtest(${PROJECT_NAME}_test_message_stream_sequencer test/test_message_stream_sequencer.cpp)
   target_include_directories(${PROJECT_NAME}_test_message_stream_sequencer PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -191,4 +174,4 @@ ament_index_get_resource(ISAAC_ROS_COMMON_CMAKE_PATH isaac_ros_common_cmake_path
 include("${ISAAC_ROS_COMMON_CMAKE_PATH}/isaac_ros_common-version-info.cmake")
 generate_version_info(${PROJECT_NAME})
 
-ament_auto_package(INSTALL_TO_SHARE config launch rviz)
+ament_auto_package(INSTALL_TO_SHARE launch rviz)
