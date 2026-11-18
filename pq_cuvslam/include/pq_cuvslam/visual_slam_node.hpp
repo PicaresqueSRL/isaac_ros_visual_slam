@@ -28,6 +28,7 @@
 #include "pq_cuvslam/impl/types.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp/qos.hpp"
+#include "tf2_msgs/msg/tf_message.hpp"
 
 namespace pq
 {
@@ -67,11 +68,39 @@ inline const char * TrackingModeToString(int mode)
   }
 }
 
+/// Processing mode of the cuVSLAM tracker.
+enum class ProcessingMode
+{
+  REALTIME,  ///< Bundle adjustment and SLAM in background threads (Isaac ROS behaviour)
+  OFFLINE    ///< Bundle adjustment and SLAM in the tracking call: reproducible runs
+};
+
 class VisualSlamNode : public rclcpp::Node
 {
 public:
   explicit VisualSlamNode(const rclcpp::NodeOptions options = rclcpp::NodeOptions());
   virtual ~VisualSlamNode();
+
+  // Direct input, bypassing the subscriptions (bag replay). Messages must be given in the
+  // order in which they would have been received. Not thread safe: call from one thread and
+  // do not spin the node at the same time.
+  void InputImage(int index, const ImageType & msg);
+  void InputCameraInfo(int index, const CameraInfoType::ConstSharedPtr & msg);
+  void InputImu(const ImuType::ConstSharedPtr & msg);
+  void InputStaticTransforms(const tf2_msgs::msg::TFMessage & msg);
+
+  // Input topics after remapping, with the input index used by InputImage / InputCameraInfo.
+  std::vector<std::pair<int, std::string>> GetImageTopics() const;
+  std::vector<std::pair<int, std::string>> GetCameraInfoTopics() const;
+  // Empty when the IMU is not used.
+  std::string GetImuTopic() const;
+
+  // Description of the input written to run_info.json (e.g. the bag path).
+  void SetRunInput(const std::string & input);
+
+  // Writes the run output to run_output_dir (if set). Called automatically at destruction;
+  // later calls do nothing.
+  void WriteRunOutput();
 
 private:
   // Functional Parameters:
@@ -255,6 +284,12 @@ private:
 
   // Enable requesting another hint if current hint fails to initialize cuvslam localization.
   const bool enable_request_hint_;
+
+  // Processing mode: "realtime" (default) or "offline" (reproducible, see ProcessingMode).
+  const ProcessingMode processing_mode_;
+
+  // If set, the run output (CSV files and run_info.json) is written to this folder.
+  const std::string run_output_dir_;
 
   // Callback group
   const rclcpp::CallbackGroup::SharedPtr localize_in_map_callback_group_;

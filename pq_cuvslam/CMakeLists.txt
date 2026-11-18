@@ -152,6 +152,7 @@ ament_auto_add_library(
   src/impl/pose_cache.cpp
   src/impl/posegraph_vis_helper.cpp
   src/impl/qos.cpp
+  src/impl/run_output.cpp
   src/impl/visual_slam_impl.cpp
   src/impl/viz_helper.cpp
 )
@@ -165,6 +166,19 @@ add_dependencies(visual_slam_node cuvslam_external)
 if(VSLAM_WITH_CUDA_BUFFER)
   target_compile_definitions(visual_slam_node PRIVATE VSLAM_WITH_CUDA_BUFFER)
 endif()
+
+# Commit of the wrapper, written to run_info.json. Read at configure time.
+execute_process(
+  COMMAND git -C "${CMAKE_CURRENT_SOURCE_DIR}" describe --always --dirty --abbrev=12
+  OUTPUT_VARIABLE PQ_CUVSLAM_GIT_COMMIT
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  ERROR_QUIET)
+if(NOT PQ_CUVSLAM_GIT_COMMIT)
+  set(PQ_CUVSLAM_GIT_COMMIT "unknown")
+endif()
+message(STATUS "pq_cuvslam commit: ${PQ_CUVSLAM_GIT_COMMIT}")
+target_compile_definitions(visual_slam_node PRIVATE
+  PQ_CUVSLAM_GIT_COMMIT="${PQ_CUVSLAM_GIT_COMMIT}")
 rclcpp_components_register_nodes(visual_slam_node "pq::visual_slam::VisualSlamNode")
 set(node_plugins "${node_plugins}pq::visual_slam::VisualSlamNode;$<TARGET_FILE:visual_slam_node>\n")
 
@@ -173,6 +187,12 @@ ament_auto_add_executable(${PROJECT_NAME}
   src/visual_slam_main.cpp
 )
 target_link_libraries(${PROJECT_NAME} visual_slam_node)
+
+# Deterministic bag replay executable
+ament_auto_add_executable(pq_cuvslam_replay
+  src/replay_main.cpp
+)
+target_link_libraries(pq_cuvslam_replay visual_slam_node)
 
 # API launcher executable
 install(PROGRAMS

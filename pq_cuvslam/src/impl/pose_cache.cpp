@@ -289,9 +289,9 @@ void VelocityCache::Add(
   const double & pitch, const double & yaw)
 {
   velocities_.push_back(
-        {
-          x, y, z,
-          roll, pitch, yaw
+      {
+        x, y, z,
+        roll, pitch, yaw
         });
 
   while (velocities_.size() > num_velocities_to_keep_) {

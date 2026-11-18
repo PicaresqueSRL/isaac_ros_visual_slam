@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -119,6 +120,20 @@ verbosity_(declare_parameter<int>("verbosity", 1)),
 enable_debug_mode_(declare_parameter<bool>("enable_debug_mode", false)),
 debug_dump_path_(declare_parameter<std::string>("debug_dump_path", "/tmp/cuvslam")),
 enable_request_hint_(declare_parameter<bool>("enable_request_hint", true)),
+processing_mode_(
+  [this]() {
+    rcl_interfaces::msg::ParameterDescriptor descriptor;
+    descriptor.description =
+    "realtime: bundle adjustment and SLAM in background threads (default); "
+    "offline: bundle adjustment and SLAM in the tracking call, reproducible runs";
+    const std::string mode = declare_parameter<std::string>("processing_mode", "realtime",
+      descriptor);
+    if (mode == "realtime") {return ProcessingMode::REALTIME;}
+    if (mode == "offline") {return ProcessingMode::OFFLINE;}
+    throw std::invalid_argument(
+      "Invalid processing_mode '" + mode + "'. Valid values are 'realtime' and 'offline'");
+  }()),
+run_output_dir_(declare_parameter<std::string>("run_output_dir", "")),
 localize_in_map_callback_group_(this->create_callback_group(rclcpp::CallbackGroupType::
   MutuallyExclusive)),
 // Subscribers:
@@ -346,6 +361,12 @@ impl_(std::make_unique<VisualSlamImpl>(*this))
     exit(EXIT_FAILURE);
   }
   RCLCPP_INFO(get_logger(), "Tracking mode: %s", TrackingModeToString(tracking_mode_));
+  RCLCPP_INFO(
+    get_logger(), "Processing mode: %s",
+    processing_mode_ == ProcessingMode::OFFLINE ? "offline" : "realtime");
+  if (!run_output_dir_.empty()) {
+    RCLCPP_INFO(get_logger(), "Run output folder: %s", run_output_dir_.c_str());
+  }
 
   Stopwatch stopwatch_gpu;
   StopwatchScope ssw_gpu(stopwatch_gpu);
@@ -362,12 +383,78 @@ VisualSlamNode::~VisualSlamNode()
     localization_thread_.join();
   }
 
+  WriteRunOutput();
+
   if (!save_map_folder_path_.empty()) {
     if (impl_->IsInitialized()) {
       impl_->SaveMap(save_map_folder_path_);
     }
   }
   impl_.reset();
+}
+
+void VisualSlamNode::InputImage(int index, const ImageType & msg)
+{
+  impl_->CallbackImage(index, msg);
+}
+
+void VisualSlamNode::InputCameraInfo(int index, const CameraInfoType::ConstSharedPtr & msg)
+{
+  impl_->CallbackCameraInfo(index, msg);
+}
+
+void VisualSlamNode::InputImu(const ImuType::ConstSharedPtr & msg)
+{
+  impl_->CallbackImu(msg);
+}
+
+void VisualSlamNode::InputStaticTransforms(const tf2_msgs::msg::TFMessage & msg)
+{
+  for (const auto & transform : msg.transforms) {
+    impl_->tf_buffer->setTransform(transform, "bag_replay", true);
+  }
+}
+
+std::vector<std::pair<int, std::string>> VisualSlamNode::GetImageTopics() const
+{
+  std::vector<std::pair<int, std::string>> topics;
+  for (size_t i = 0; i < image_subs_.size(); ++i) {
+    topics.emplace_back(static_cast<int>(i), image_subs_[i]->get_topic_name());
+  }
+  for (size_t i = 0; i < segmentation_masks_subs_.size(); ++i) {
+    topics.emplace_back(
+      static_cast<int>(num_cameras_ + i), segmentation_masks_subs_[i]->get_topic_name());
+  }
+  for (const auto & sub : depth_image_subs_) {
+    topics.emplace_back(static_cast<int>(num_cameras_ + num_input_masks_), sub->get_topic_name());
+  }
+  return topics;
+}
+
+std::vector<std::pair<int, std::string>> VisualSlamNode::GetCameraInfoTopics() const
+{
+  std::vector<std::pair<int, std::string>> topics;
+  for (size_t i = 0; i < camera_info_subs_.size(); ++i) {
+    topics.emplace_back(static_cast<int>(i), camera_info_subs_[i]->get_topic_name());
+  }
+  return topics;
+}
+
+std::string VisualSlamNode::GetImuTopic() const
+{
+  return imu_sub_ ? imu_sub_->get_topic_name() : "";
+}
+
+void VisualSlamNode::SetRunInput(const std::string & input)
+{
+  impl_->run_input = input;
+}
+
+void VisualSlamNode::WriteRunOutput()
+{
+  if (impl_) {
+    impl_->WriteRunOutput();
+  }
 }
 
 void VisualSlamNode::CallbackReset(

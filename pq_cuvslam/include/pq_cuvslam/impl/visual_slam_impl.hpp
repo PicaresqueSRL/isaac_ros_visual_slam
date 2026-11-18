@@ -44,6 +44,7 @@
 #include "pq_cuvslam/impl/message_stream_sequencer.hpp"
 #include "pq_cuvslam/impl/pose_cache.hpp"
 #include "pq_cuvslam/impl/posegraph_vis_helper.hpp"
+#include "pq_cuvslam/impl/run_output.hpp"
 #include "pq_cuvslam/impl/types.hpp"
 #include "pq_cuvslam/visual_slam_node.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -145,6 +146,14 @@ struct VisualSlamNode::VisualSlamImpl
   // Check and handle the localization future status
   void CheckLocalizationStatus();
 
+  // Add one processed frame to the run output.
+  void AddRunOutputFrame(
+    int64_t timestamp_ns, bool tracked, const std::optional<tf2::Transform> & odom_pose,
+    const std::optional<tf2::Transform> & slam_pose, double track_time_ms);
+
+  // Write the run output (see RunOutput) if enabled and not written yet.
+  void WriteRunOutput();
+
   // Reference to the ros node.
   VisualSlamNode & node;
 
@@ -214,6 +223,12 @@ struct VisualSlamNode::VisualSlamImpl
   // Store the localization future to prevent it from being destroyed before callback completes
   std::optional<boost::future<std::optional<PoseType>>> localization_future_;
   mutable std::mutex localization_mutex_;
+
+  // Run output (CSV files and run_info.json); null when run_output_dir is not set.
+  std::unique_ptr<RunOutput> run_output;
+  bool run_output_written = false;
+  // Description of the input, for run_info.json (e.g. bag path in replay).
+  std::string run_input;
 
   // CUDA stream used for rosidl::Buffer ReadHandle synchronization between the producer
   // (upstream node) and cuVSLAM. Created in the constructor and destroyed in the destructor.

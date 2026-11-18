@@ -28,6 +28,10 @@
 #endif
 
 #include "Eigen/Dense"
+
+#ifndef PQ_CUVSLAM_GIT_COMMIT
+#define PQ_CUVSLAM_GIT_COMMIT "unknown"
+#endif
 #if defined(VSLAM_WITH_CUDA_BUFFER)
   #include "cuda_buffer/cuda_buffer_api.hpp"
 #endif
@@ -167,6 +171,10 @@ VisualSlamNode::VisualSlamImpl::VisualSlamImpl(VisualSlamNode & vslam_node)
   }
 
   cuvslam::SetVerbosity(node.verbosity_);
+
+  if (!node.run_output_dir_.empty()) {
+    run_output = std::make_unique<RunOutput>(node.run_output_dir_, node.num_cameras_);
+  }
 
   sequencer.RegisterCallback(
     std::bind(
@@ -486,6 +494,8 @@ cuvslam::Odometry::Config VisualSlamNode::VisualSlamImpl::CreateOdometryConfigur
   }
 
   configuration.debug_imu_mode = node.enable_debug_imu_mode_;
+  // Offline: bundle adjustment in the tracking call instead of a background thread.
+  configuration.async_sba = node.processing_mode_ != ProcessingMode::OFFLINE;
   configuration.max_frame_delta_s = node.image_jitter_threshold_ms_ / 1000.0f;
 
   return configuration;
@@ -498,6 +508,8 @@ cuvslam::Slam::Config VisualSlamNode::VisualSlamImpl::CreateSlamConfiguration()
   configuration.planar_constraints = node.enable_ground_constraint_in_slam_;
   configuration.throttling_time_ms = node.slam_throttling_time_ms_;
   configuration.max_map_size = node.slam_max_map_size_;
+  // Offline: SLAM in the tracking call instead of a separate work thread.
+  configuration.sync_mode = node.processing_mode_ == ProcessingMode::OFFLINE;
   return configuration;
 }
 
@@ -869,6 +881,10 @@ void VisualSlamNode::VisualSlamImpl::UpdatePose(
   const rclcpp::Time timestamp_output = node.override_publishing_stamp_ ?
     node.get_clock()->now() : rclcpp::Time(latest_ts);
 
+  // Poses of the base frame for the run output.
+  std::optional<tf2::Transform> output_odom_pose;
+  std::optional<tf2::Transform> output_slam_pose;
+
   if (vo_success) {
     if (ground_constraint &&
       !PoseToGround(*ground_constraint, vo_pose_estimate.world_from_rig.value().pose,
@@ -904,6 +920,11 @@ void VisualSlamNode::VisualSlamImpl::UpdatePose(
     const tf2::Transform map_pose_base_link =
       ChangeBasis(canonical_pose_cuvslam, cv_map_pose_cv_base_link);
     const tf2::Transform map_pose_odom = map_pose_base_link * odom_pose_base_link.inverse();
+
+    output_odom_pose = odom_pose_base_link;
+    if (node.enable_localization_n_mapping_) {
+      output_slam_pose = map_pose_base_link;
+    }
 
     // Publish transforms to the TF tree.
     if (node.publish_map_to_odom_tf_) {
@@ -1066,6 +1087,11 @@ void VisualSlamNode::VisualSlamImpl::UpdatePose(
   if (values.size()) {
     track_execution_time_mean /= values.size();
   }
+  if (run_output) {
+    AddRunOutputFrame(latest_ts, vo_success, output_odom_pose, output_slam_pose,
+      track_execution_time * 1000.0);
+  }
+
   // Publish status.
   std_msgs::msg::Header header;
   header.stamp = timestamp_output;
@@ -1313,6 +1339,110 @@ void VisualSlamNode::VisualSlamImpl::CheckLocalizationStatus()
       // Clear the future
       localization_future_.reset();
     }
+  }
+}
+
+void VisualSlamNode::VisualSlamImpl::AddRunOutputFrame(
+  int64_t timestamp_ns, bool tracked, const std::optional<tf2::Transform> & odom_pose,
+  const std::optional<tf2::Transform> & slam_pose, double track_time_ms)
+{
+  // Observations and landmarks are available only when their export is enabled
+  // (see CreateOdometryConfiguration).
+  std::vector<size_t> observations(node.num_cameras_, 0);
+  size_t num_landmarks = 0;
+  const bool observations_exported = node.enable_observations_view_ ||
+    node.enable_localization_n_mapping_;
+  const bool landmarks_exported = node.enable_landmarks_view_ ||
+    node.enable_localization_n_mapping_;
+  try {
+    if (observations_exported) {
+      for (uint32_t i = 0; i < node.num_cameras_; ++i) {
+        observations[i] = cuvslam_odometry->GetLastObservations(i).size();
+      }
+    }
+    if (landmarks_exported) {
+      num_landmarks = cuvslam_odometry->GetLastLandmarks().size();
+    }
+  } catch (const std::exception & e) {
+    RCLCPP_WARN_ONCE(node.get_logger(), "Run output: cannot read observations: %s", e.what());
+  }
+
+  run_output->AddFrame(
+    timestamp_ns, tracked, odom_pose, slam_pose, track_time_ms, num_landmarks, observations);
+
+  if (cuvslam_slam) {
+    try {
+      cuvslam::Slam::Metrics metrics;
+      cuvslam_slam->GetSlamMetrics(metrics);
+      run_output->AddSlamMetrics(timestamp_ns, metrics);
+    } catch (const std::exception & e) {
+      RCLCPP_WARN_ONCE(node.get_logger(), "Run output: cannot read SLAM metrics: %s", e.what());
+    }
+  }
+}
+
+void VisualSlamNode::VisualSlamImpl::WriteRunOutput()
+{
+  if (!run_output || run_output_written) {
+    return;
+  }
+  run_output_written = true;
+
+  int32_t major = 0, minor = 0, patch = 0;
+  const std::string cuvslam_version(cuvslam::GetVersion(&major, &minor, &patch));
+
+  JsonObject params;
+  params.Add("tracking_mode", node.tracking_mode_)
+  .Add("num_cameras", static_cast<uint64_t>(node.num_cameras_))
+  .Add("min_num_images", static_cast<uint64_t>(node.min_num_images_))
+  .Add("multicam_mode", static_cast<uint64_t>(node.multicam_mode_))
+  .Add("rectified_images", node.rectified_images_)
+  .Add("enable_image_denoising", node.enable_image_denoising_)
+  .Add("enable_localization_n_mapping", node.enable_localization_n_mapping_)
+  .Add("enable_ground_constraint_in_odometry", node.enable_ground_constraint_in_odometry_)
+  .Add("enable_ground_constraint_in_slam", node.enable_ground_constraint_in_slam_)
+  .Add("sync_matching_threshold_ms", node.sync_matching_threshold_ms_)
+  .Add("image_jitter_threshold_ms", node.image_jitter_threshold_ms_)
+  .Add("imu_jitter_threshold_ms", node.imu_jitter_threshold_ms_)
+  .Add("gyro_noise_density", node.imu_params_.gyroscope_noise_density)
+  .Add("gyro_random_walk", node.imu_params_.gyroscope_random_walk)
+  .Add("accel_noise_density", node.imu_params_.accelerometer_noise_density)
+  .Add("accel_random_walk", node.imu_params_.accelerometer_random_walk)
+  .Add("calibration_frequency", node.imu_params_.calibration_frequency)
+  .Add("slam_max_map_size", static_cast<uint64_t>(node.slam_max_map_size_))
+  .Add("slam_throttling_time_ms", static_cast<uint64_t>(node.slam_throttling_time_ms_))
+  .Add("image_buffer_size", static_cast<uint64_t>(node.image_buffer_size_))
+  .Add("imu_buffer_size", static_cast<uint64_t>(node.imu_buffer_size_))
+  .Add("camera_optical_frames", node.camera_optical_frames_)
+  .Add("imu_frame", node.imu_frame_);
+
+  std::vector<std::string> image_topics;
+  for (const auto & [idx, topic] : node.GetImageTopics()) {
+    image_topics.push_back(topic);
+  }
+
+  JsonObject info;
+  info.Add("tool", "pq_cuvslam")
+  .Add("wrapper_commit", PQ_CUVSLAM_GIT_COMMIT)
+  .Add("cuvslam_version", cuvslam_version)
+  .Add("input", run_input.empty() ? std::string("live topics") : run_input)
+  .Add("processing_mode",
+    node.processing_mode_ == ProcessingMode::OFFLINE ? "offline" : "realtime")
+  .Add("mode", TrackingModeToString(node.tracking_mode_))
+  .Add("slam", node.enable_localization_n_mapping_)
+  .Add("imu", node.tracking_mode_ == static_cast<int>(TrackingMode::VIO))
+  .Add("image_topics", image_topics)
+  .Add("imu_topic", node.GetImuTopic())
+  .Add("base_frame", node.base_frame_)
+  .Add("parameters", params);
+
+  if (run_output->Write(cuvslam_slam.get(), info)) {
+    RCLCPP_INFO(
+      node.get_logger(), "Run output written to %s (%zu frames)",
+      run_output->Directory().c_str(), run_output->NumFrames());
+  } else {
+    RCLCPP_ERROR(
+      node.get_logger(), "Cannot write the run output to %s", run_output->Directory().c_str());
   }
 }
 
