@@ -22,7 +22,7 @@
 #include <vector>
 #include <thread>
 
-#include "isaac_ros_common/qos.hpp"
+#include "isaac_ros_cuvslam/impl/qos.hpp"
 #include "isaac_ros_cuvslam/visual_slam_node.hpp"
 #include "isaac_ros_cuvslam/impl/types.hpp"
 #include "isaac_ros_cuvslam/impl/visual_slam_impl.hpp"
@@ -104,8 +104,8 @@ imu_frame_(declare_parameter<std::string>("imu_frame", "")),
 // Message Parameters:
 image_buffer_size_(declare_parameter<int>("image_buffer_size", 10)),
 imu_buffer_size_(declare_parameter<int>("imu_buffer_size", 50)),
-image_qos_(::isaac_ros::common::AddQosParameter(*this, "SENSOR_DATA", "image_qos")),
-imu_qos_(::isaac_ros::common::AddQosParameter(*this, "SENSOR_DATA", "imu_qos")),
+image_qos_(AddQosParameter(*this, "SENSOR_DATA", "image_qos")),
+imu_qos_(AddQosParameter(*this, "SENSOR_DATA", "imu_qos")),
 // Output Parameters:
 override_publishing_stamp_(declare_parameter<bool>("override_publishing_stamp", false)),
 publish_map_to_odom_tf_(declare_parameter<bool>("publish_map_to_odom_tf", true)),
@@ -212,80 +212,80 @@ initial_pose_sub_(
 // Publishers: Visual SLAM
 visual_slam_status_pub_(
   create_publisher<VisualSlamStatusType>(
-    "visual_slam/status", ::isaac_ros::common::ParseQosString("DEFAULT"))),
+    "visual_slam/status", ParseQosString("DEFAULT"))),
 tracking_vo_pose_pub_(
   create_publisher<PoseStampedType>(
-    "visual_slam/tracking/vo_pose", ::isaac_ros::common::ParseQosString("DEFAULT"))),
+    "visual_slam/tracking/vo_pose", ParseQosString("DEFAULT"))),
 tracking_vo_pose_covariance_pub_(
   create_publisher<PoseWithCovarianceStampedType>(
-    "visual_slam/tracking/vo_pose_covariance", ::isaac_ros::common::ParseQosString("DEFAULT"))),
+    "visual_slam/tracking/vo_pose_covariance", ParseQosString("DEFAULT"))),
 tracking_odometry_pub_(
   create_publisher<OdometryType>(
-    "visual_slam/tracking/odometry", ::isaac_ros::common::ParseQosString("DEFAULT"))),
+    "visual_slam/tracking/odometry", ParseQosString("DEFAULT"))),
 tracking_vo_path_pub_(
   create_publisher<PathType>(
-    "visual_slam/tracking/vo_path", ::isaac_ros::common::ParseQosString("DEFAULT"))),
+    "visual_slam/tracking/vo_path", ParseQosString("DEFAULT"))),
 tracking_slam_path_pub_(
   create_publisher<PathType>(
-    "visual_slam/tracking/slam_path", ::isaac_ros::common::ParseQosString("DEFAULT"))),
+    "visual_slam/tracking/slam_path", ParseQosString("DEFAULT"))),
 diagnostics_pub_(
   create_publisher<DiagnosticArrayType>(
-    "/diagnostics", ::isaac_ros::common::ParseQosString("DEFAULT"))),
+    "/diagnostics", ParseQosString("DEFAULT"))),
 
 // Publishers: sends a message to request another pose hint.
 trigger_hint_pub_(
   [this]() -> rclcpp::Publisher<PoseWithCovarianceStampedType>::SharedPtr {
     if (!enable_request_hint_) {return nullptr;}
     return create_publisher<PoseWithCovarianceStampedType>(
-      "visual_slam/trigger_hint", ::isaac_ros::common::ParseQosString("DEFAULT"));
+      "visual_slam/trigger_hint", ParseQosString("DEFAULT"));
   }()),
 
 // Visualizators for odometry
 vis_observations_pub_(
   create_publisher<PointCloud2Type>(
-    "visual_slam/vis/observations_cloud", ::isaac_ros::common::ParseQosString("DEFAULT"))),
+    "visual_slam/vis/observations_cloud", ParseQosString("DEFAULT"))),
 vis_gravity_pub_(
   create_publisher<MarkerType>(
-    "visual_slam/vis/gravity", ::isaac_ros::common::ParseQosString("DEFAULT"))),
+    "visual_slam/vis/gravity", ParseQosString("DEFAULT"))),
 vis_vo_velocity_pub_(
   create_publisher<MarkerArrayType>(
-    "visual_slam/vis/velocity", ::isaac_ros::common::ParseQosString("DEFAULT"))),
+    "visual_slam/vis/velocity", ParseQosString("DEFAULT"))),
 vis_slam_odometry_pub_(
   create_publisher<OdometryType>(
-    "visual_slam/vis/slam_odometry", ::isaac_ros::common::ParseQosString("DEFAULT"))),
+    "visual_slam/vis/slam_odometry", ParseQosString("DEFAULT"))),
 
 // Visualizators for map and "loop closure"
 vis_landmarks_pub_(
   create_publisher<PointCloud2Type>(
-    "visual_slam/vis/landmarks_cloud", ::isaac_ros::common::ParseQosString("DEFAULT"))),
+    "visual_slam/vis/landmarks_cloud", ParseQosString("DEFAULT"))),
 vis_loop_closure_pub_(
   create_publisher<PointCloud2Type>(
-    "visual_slam/vis/loop_closure_cloud", ::isaac_ros::common::ParseQosString("DEFAULT"))),
+    "visual_slam/vis/loop_closure_cloud", ParseQosString("DEFAULT"))),
 vis_posegraph_nodes_pub_(
   create_publisher<PoseArrayType>(
-    "visual_slam/vis/pose_graph_nodes", ::isaac_ros::common::ParseQosString("DEFAULT"))),
+    "visual_slam/vis/pose_graph_nodes", ParseQosString("DEFAULT"))),
 vis_posegraph_edges_pub_(
   create_publisher<MarkerType>(
-    "visual_slam/vis/pose_graph_edges", ::isaac_ros::common::ParseQosString("DEFAULT"))),
+    "visual_slam/vis/pose_graph_edges", ParseQosString("DEFAULT"))),
 vis_posegraph_edges2_pub_(
   create_publisher<MarkerType>(
-    "visual_slam/vis/pose_graph_edges2", ::isaac_ros::common::ParseQosString("DEFAULT"))),
+    "visual_slam/vis/pose_graph_edges2", ParseQosString("DEFAULT"))),
 
 // Visualizators for localization
 vis_localizer_pub_(
   create_publisher<MarkerArrayType>(
-    "visual_slam/vis/localizer", ::isaac_ros::common::ParseQosString("DEFAULT"))),
+    "visual_slam/vis/localizer", ParseQosString("DEFAULT"))),
 vis_localizer_landmarks_pub_(
   create_publisher<PointCloud2Type>(
-    "visual_slam/vis/localizer_map_cloud", ::isaac_ros::common::ParseQosString("DEFAULT"))),
+    "visual_slam/vis/localizer_map_cloud", ParseQosString("DEFAULT"))),
 vis_localizer_observations_pub_(
   create_publisher<PointCloud2Type>(
     "visual_slam/vis/localizer_observations_cloud",
-    ::isaac_ros::common::ParseQosString("DEFAULT"))),
+    ParseQosString("DEFAULT"))),
 vis_localizer_loop_closure_pub_(
   create_publisher<PointCloud2Type>(
     "visual_slam/vis/localizer_loop_closure_cloud",
-      ::isaac_ros::common::ParseQosString("DEFAULT"))),
+      ParseQosString("DEFAULT"))),
 
 // Slam Services
 reset_srv_(

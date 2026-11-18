@@ -32,9 +32,7 @@ include(ExternalProject)
 
 # Ensure CUDA imported targets (e.g., CUDA::nvtx3) are available
 find_package(CUDAToolkit REQUIRED)
-find_package(isaac_ros_common REQUIRED)
 find_package(isaac_ros_visual_slam_interfaces REQUIRED)
-find_library(ISAAC_ROS_COMMON_LIBRARY isaac_ros_common REQUIRED)
 find_library(ISAAC_ROS_VISUAL_SLAM_INTERFACES_TYPESUPPORT_CPP_LIBRARY
   isaac_ros_visual_slam_interfaces__rosidl_typesupport_cpp REQUIRED)
 get_filename_component(CUVSLAM_CUDA_ROOT "${CUDAToolkit_BIN_DIR}" DIRECTORY)
@@ -51,14 +49,37 @@ endif()
 find_package(Threads REQUIRED)
 find_package(Eigen3 REQUIRED)
 include_directories(${EIGEN3_INCLUDE_DIR})
-include_directories(${isaac_common_INCLUDE_DIRS})
 
 set(VISUAL_SLAM_LIBRARIES
-  ${cuda_buffer_TARGETS}
   CUDA::cudart
-  ${ISAAC_ROS_COMMON_LIBRARY}
   ${ISAAC_ROS_VISUAL_SLAM_INTERFACES_TYPESUPPORT_CPP_LIBRARY}
 )
+
+# Zero-copy GPU image transport through Isaac ROS cuda_buffer.
+#   AUTO: enabled if the cuda_buffer package is found (e.g. Isaac ROS container)
+#   ON:   required, configuration fails if cuda_buffer is missing
+#   OFF:  disabled, images are passed to cuVSLAM in host memory
+# cuda_buffer is intentionally not listed in package.xml, so that the package
+# builds on a standard ROS 2 installation.
+set(USE_CUDA_BUFFER "AUTO" CACHE STRING "Use Isaac ROS cuda_buffer for zero-copy images (AUTO/ON/OFF)")
+set_property(CACHE USE_CUDA_BUFFER PROPERTY STRINGS AUTO ON OFF)
+set(VSLAM_WITH_CUDA_BUFFER OFF)
+if(NOT USE_CUDA_BUFFER STREQUAL "OFF")
+  find_package(cuda_buffer QUIET)
+  if(cuda_buffer_FOUND)
+    set(VSLAM_WITH_CUDA_BUFFER ON)
+  elseif(USE_CUDA_BUFFER STREQUAL "ON")
+    message(FATAL_ERROR "USE_CUDA_BUFFER=ON but the cuda_buffer package was not found")
+  endif()
+endif()
+message(STATUS "cuda_buffer zero-copy images: ${VSLAM_WITH_CUDA_BUFFER}")
+if(VSLAM_WITH_CUDA_BUFFER)
+  list(APPEND VISUAL_SLAM_LIBRARIES ${cuda_buffer_TARGETS})
+endif()
+
+# cuNLS solver in cuVSLAM (requires CUDA >= 12.6, cuBLAS and cuSOLVER).
+# OFF by default, as in the Isaac ROS node, for the parity test.
+option(USE_CUNLS "Build cuVSLAM with cuNLS support" OFF)
 
 get_filename_component(CUVSLAM_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../cuvslam" REALPATH)
 if(NOT EXISTS "${CUVSLAM_SOURCE_DIR}/CMakeLists.txt")
@@ -95,7 +116,7 @@ externalproject_add(cuvslam_external
     -DUSE_NVTX=${USE_NVTX}
     -DUSE_RERUN=OFF
     -DUSE_CERES=OFF
-    -DUSE_CUNLS=OFF
+    -DUSE_CUNLS=${USE_CUNLS}
   BUILD_COMMAND ${CMAKE_COMMAND} -E env
     ${CUVSLAM_GIT_SAFE_DIR_ENV}
     ${CMAKE_COMMAND} --build <BINARY_DIR> --target cuvslam_api_launcher
@@ -121,6 +142,7 @@ ament_auto_add_library(
   src/impl/localizer_vis_helper.cpp
   src/impl/pose_cache.cpp
   src/impl/posegraph_vis_helper.cpp
+  src/impl/qos.cpp
   src/impl/visual_slam_impl.cpp
   src/impl/viz_helper.cpp
 )
@@ -131,6 +153,9 @@ target_link_libraries(visual_slam_node
   ${VISUAL_SLAM_LIBRARIES}
 )
 add_dependencies(visual_slam_node cuvslam_external)
+if(VSLAM_WITH_CUDA_BUFFER)
+  target_compile_definitions(visual_slam_node PRIVATE VSLAM_WITH_CUDA_BUFFER)
+endif()
 rclcpp_components_register_nodes(visual_slam_node "nvidia::isaac_ros::visual_slam::VisualSlamNode")
 set(node_plugins "${node_plugins}nvidia::isaac_ros::visual_slam::VisualSlamNode;$<TARGET_FILE:visual_slam_node>\n")
 
@@ -166,12 +191,14 @@ if(BUILD_TESTING)
   ament_target_dependencies(${PROJECT_NAME}_test_message_stream_sequencer
     std_msgs
   )
+
+  # Tests of the vendored isaac_common headers
+  foreach(_test test_message_buffer test_message_stream_synchronizer)
+    ament_add_gtest(${PROJECT_NAME}_${_test} test/${_test}.cpp)
+    target_include_directories(${PROJECT_NAME}_${_test} PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    )
+  endforeach()
 endif()
-
-
-# Embed versioning information into installed files
-ament_index_get_resource(ISAAC_ROS_COMMON_CMAKE_PATH isaac_ros_common_cmake_path isaac_ros_common)
-include("${ISAAC_ROS_COMMON_CMAKE_PATH}/isaac_ros_common-version-info.cmake")
-generate_version_info(${PROJECT_NAME})
 
 ament_auto_package(INSTALL_TO_SHARE launch rviz)

@@ -23,7 +23,7 @@
 #include <utility>
 #include <vector>
 
-#include "isaac_common/messaging/message_buffer.hpp"
+#include "isaac_ros_cuvslam/third_party/isaac_common/messaging/message_buffer.hpp"
 
 namespace nvidia
 {

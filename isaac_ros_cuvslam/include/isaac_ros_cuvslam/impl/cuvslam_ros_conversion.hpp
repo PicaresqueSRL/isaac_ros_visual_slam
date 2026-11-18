@@ -20,7 +20,6 @@
 
 #include <string>
 
-#include "cuda_buffer/cuda_buffer_api.hpp"
 #include "cuvslam/cuvslam2.h"
 #include "cv_bridge/cv_bridge.hpp"
 #include "isaac_ros_cuvslam/impl/types.hpp"
@@ -62,16 +61,25 @@ tf2::Transform FromcuVSLAMPose(const cuvslam::Pose & cuvslam_pose);
 
 cuvslam::Image::Encoding TocuVSLAMImageEncoding(const std::string & image_encoding);
 
+// Pixel buffer of an image message, either in host or in device (GPU) memory.
+// The memory must stay valid until cuVSLAM has finished using the cuvslam::Image
+// built from it.
+struct ImagePixels
+{
+  const void * ptr = nullptr;
+  bool is_gpu_mem = false;
+};
+
 cuvslam::Image TocuVSLAMImage(
   int32_t camera_index,
   const sensor_msgs::msg::Image & image,
-  const cuda_buffer_backend::ReadHandle & read_handle,
+  const ImagePixels & pixels,
   const int64_t & acqtime_ns);
 
 cuvslam::Image TocuVSLAMDepthImage(
   int32_t camera_index,
   const sensor_msgs::msg::Image & image,
-  const cuda_buffer_backend::ReadHandle & read_handle,
+  const ImagePixels & pixels,
   const int64_t & acqtime_ns);
 
 cuvslam::ImuMeasurement TocuVSLAMImuMeasurement(

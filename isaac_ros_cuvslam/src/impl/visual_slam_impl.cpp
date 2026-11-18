@@ -28,7 +28,9 @@
 #endif
 
 #include "Eigen/Dense"
-#include "cuda_buffer/cuda_buffer_api.hpp"
+#if defined(VSLAM_WITH_CUDA_BUFFER)
+  #include "cuda_buffer/cuda_buffer_api.hpp"
+#endif
 #include "isaac_ros_cuvslam/impl/cuvslam_ros_conversion.hpp"
 #include "isaac_ros_cuvslam/impl/has_subscribers.hpp"
 #include "isaac_ros_cuvslam/impl/stopwatch.hpp"
@@ -779,11 +781,26 @@ void VisualSlamNode::VisualSlamImpl::UpdatePose(
   cuvslam_images.reserve(node.num_cameras_);
   std::vector<cuvslam::Image> cuvslam_masks;
   std::vector<cuvslam::Image> cuvslam_depth_images;
+#if defined(VSLAM_WITH_CUDA_BUFFER)
+  // Zero-copy path: images are accessed in GPU memory through cuda_buffer.
   // ReadHandles must outlive the cuvslam::Odometry::Track call so that the
   // GPU memory referenced by cuvslam_images stays valid and the CUDA event
   // synchronization between producer and consumer is preserved.
   std::vector<cuda_buffer_backend::ReadHandle> read_handles;
   read_handles.reserve(idx_and_image_msgs.size());
+  const auto acquire_pixels = [&](const sensor_msgs::msg::Image & msg) {
+      auto handle = cuda_buffer_backend::from_input_buffer(msg.data, cuda_stream_);
+      const ImagePixels pixels{handle.get_ptr(), true};
+      read_handles.push_back(std::move(handle));
+      return pixels;
+    };
+#else
+  // Standard path: images are passed to cuVSLAM in host memory. The messages are
+  // kept alive by idx_and_image_msgs until the end of this function.
+  const auto acquire_pixels = [](const sensor_msgs::msg::Image & msg) {
+      return ImagePixels{msg.data.data(), false};
+    };
+#endif
 
   // Calculate the depth image index
   const int depth_image_idx = node.num_cameras_ + node.num_input_masks_;
@@ -799,27 +816,25 @@ void VisualSlamNode::VisualSlamImpl::UpdatePose(
   for (const auto & [idx, image_msg] : idx_and_image_msgs) {
     if (idx < static_cast<int>(node.num_cameras_)) {
       // This is a regular RGB/MONO image modes
-      auto image_handle = cuda_buffer_backend::from_input_buffer(image_msg->data, cuda_stream_);
-      cuvslam_images.push_back(TocuVSLAMImage(idx, *image_msg, image_handle, latest_ts));
-      read_handles.push_back(std::move(image_handle));
+      cuvslam_images.push_back(
+        TocuVSLAMImage(idx, *image_msg, acquire_pixels(*image_msg), latest_ts));
       auto mask_it = mask_msgs.find(idx);
       if (mask_it != mask_msgs.end() && mask_it->second != nullptr) {
         const auto & mask_msg = *mask_it->second;
-        auto mask_handle = cuda_buffer_backend::from_input_buffer(mask_msg->data, cuda_stream_);
-        cuvslam_masks.push_back(TocuVSLAMImage(idx, *mask_msg, mask_handle, latest_ts));
-        read_handles.push_back(std::move(mask_handle));
+        cuvslam_masks.push_back(
+          TocuVSLAMImage(idx, *mask_msg, acquire_pixels(*mask_msg), latest_ts));
       }
     } else if (node.tracking_mode_ == static_cast<int>(TrackingMode::RGBD) &&  // NOLINT
       idx == depth_image_idx)
     {
       // This is the depth image for RGBD mode
-      auto depth_handle = cuda_buffer_backend::from_input_buffer(image_msg->data, cuda_stream_);
       cuvslam_depth_images.push_back(
-        TocuVSLAMDepthImage(node.depth_camera_id_, *image_msg, depth_handle, latest_ts));
-      read_handles.push_back(std::move(depth_handle));
+        TocuVSLAMDepthImage(
+          node.depth_camera_id_, *image_msg, acquire_pixels(*image_msg), latest_ts));
     }
   }
 
+#if defined(VSLAM_WITH_CUDA_BUFFER)
   // Ensure all producer writes have completed before cuvslam consumes the data.
   // cuvslam may use its own internal stream and synchronous CUDA APIs, so we cannot
   // rely on the from_input_buffer stream-wait alone.
@@ -831,6 +846,7 @@ void VisualSlamNode::VisualSlamImpl::UpdatePose(
       return;
     }
   }
+#endif
 
   cuvslam::PoseEstimate vo_pose_estimate;
   {

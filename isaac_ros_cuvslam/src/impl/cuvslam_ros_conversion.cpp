@@ -220,41 +220,41 @@ cuvslam::Image::Encoding TocuVSLAMImageEncoding(const std::string & image_encodi
   throw std::invalid_argument("Received unknown image encoding: " + image_encoding);
 }
 
-// Helper function to create cuvslam::Image from a rosidl::Buffer-backed image.
-// The caller must keep the supplied ReadHandle alive until cuvslam has finished
-// using the returned cuvslam::Image so that the GPU memory and CUDA-event
-// synchronization remain valid.
+// Helper function to create cuvslam::Image from an image message.
+// The caller must keep the memory referenced by `pixels` valid until cuvslam has
+// finished using the returned cuvslam::Image (with cuda_buffer: keep the ReadHandle
+// alive so that the GPU memory and CUDA-event synchronization remain valid).
 cuvslam::Image TocuVSLAMImage(
   int32_t camera_index,
   const sensor_msgs::msg::Image & image,
-  const cuda_buffer_backend::ReadHandle & read_handle,
+  const ImagePixels & pixels,
   const int64_t & acqtime_ns)
 {
   cuvslam::Image cuvslam_image;
   cuvslam_image.timestamp_ns = acqtime_ns;
-  cuvslam_image.pixels = read_handle.get_ptr();
+  cuvslam_image.pixels = pixels.ptr;
   cuvslam_image.width = image.width;
   cuvslam_image.height = image.height;
   cuvslam_image.camera_index = camera_index;
   cuvslam_image.pitch = image.step;
   cuvslam_image.encoding = TocuVSLAMImageEncoding(image.encoding);
   cuvslam_image.data_type = cuvslam::Image::DataType::UINT8;
-  cuvslam_image.is_gpu_mem = true;
+  cuvslam_image.is_gpu_mem = pixels.is_gpu_mem;
   return cuvslam_image;
 }
 
-// Helper function to create cuvslam::Image depth image from a rosidl::Buffer-backed image.
-// The caller must keep the supplied ReadHandle alive until cuvslam has finished
-// using the returned cuvslam::Image.
+// Helper function to create cuvslam::Image depth image from an image message.
+// The caller must keep the memory referenced by `pixels` valid until cuvslam has
+// finished using the returned cuvslam::Image.
 cuvslam::Image TocuVSLAMDepthImage(
   int32_t camera_index,
   const sensor_msgs::msg::Image & image,
-  const cuda_buffer_backend::ReadHandle & read_handle,
+  const ImagePixels & pixels,
   const int64_t & acqtime_ns)
 {
   cuvslam::Image cuvslam_depth_image;
   cuvslam_depth_image.timestamp_ns = acqtime_ns;
-  cuvslam_depth_image.pixels = read_handle.get_ptr();
+  cuvslam_depth_image.pixels = pixels.ptr;
   cuvslam_depth_image.width = image.width;
   cuvslam_depth_image.height = image.height;
   cuvslam_depth_image.camera_index = camera_index;
@@ -274,7 +274,7 @@ cuvslam::Image TocuVSLAMDepthImage(
     throw std::invalid_argument("Unsupported depth image encoding: " + encoding);
   }
 
-  cuvslam_depth_image.is_gpu_mem = true;
+  cuvslam_depth_image.is_gpu_mem = pixels.is_gpu_mem;
   return cuvslam_depth_image;
 }
 

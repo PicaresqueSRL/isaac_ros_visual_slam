@@ -31,12 +31,9 @@ reserved.
 
   <buildtool_depend>ament_cmake_auto</buildtool_depend>
 
-  <depend>cuda_buffer</depend>
   <depend>cv_bridge</depend>
   <depend>diagnostic_msgs</depend>
   <depend>geometry_msgs</depend>
-  <depend>isaac_common</depend>
-  <depend>isaac_ros_common</depend>
   <depend>isaac_ros_visual_slam_interfaces</depend>
   <depend>nav_msgs</depend>
   <depend>rclcpp</depend>

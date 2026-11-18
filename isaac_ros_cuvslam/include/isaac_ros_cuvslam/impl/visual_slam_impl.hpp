@@ -37,7 +37,7 @@
 #include "cuvslam/cuvslam2.h"
 #include "cuvslam/ground_constraint2.h"
 #include "cv_bridge/cv_bridge.hpp"
-#include "isaac_common/messaging/message_stream_synchronizer.hpp"
+#include "isaac_ros_cuvslam/third_party/isaac_common/messaging/message_stream_synchronizer.hpp"
 #include "isaac_ros_cuvslam/impl/landmarks_vis_helper.hpp"
 #include "isaac_ros_cuvslam/impl/limited_vector.hpp"
 #include "isaac_ros_cuvslam/impl/localizer_vis_helper.hpp"
