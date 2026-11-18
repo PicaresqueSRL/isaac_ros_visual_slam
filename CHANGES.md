@@ -16,8 +16,11 @@ This file records every change made to it. Update it with each change.
 | Isaac ROS dependencies | `isaac_ros_common`, `isaac_common`, `cuda_buffer` | none required; `cuda_buffer` optional |
 | Image transfer | zero-copy GPU (`cuda_buffer`) | GPU with `cuda_buffer`, host memory without (`USE_CUDA_BUFFER`) |
 | cuNLS | `USE_CUNLS=OFF` fixed | CMake option, default `OFF`; requires cuVSLAM >= 17 |
+| Node type | `rclcpp::Node` | lifecycle node (`configure`/`activate`/`deactivate`/`cleanup`), `autostart` |
+| Startup errors | `exit()` / "no CUDA-capable device" | `configure` fails with an explicit message (version, modes, GPU) |
 | Processing mode | realtime only (async BA and SLAM) | `processing_mode`: `realtime` (default) or `offline` (reproducible) |
-| Bag input | `ros2 bag play` at real-time speed | also `pq_cuvslam_replay`: reads the bag directly, every frame processed |
+| Bag input | `ros2 bag play` at real-time speed | also `pq_cuvslam_replay`: deterministic (every frame) or simulated online (`--rate`) |
+| Latency emulation | none | `latency_profile` / `emulated_latency_ms`: frames take as long as on the target platform |
 | Run output | topics only | also CSV + `run_info.json` (`run_output_dir`), format of `run_output.py` |
 | Build | Isaac ROS container | `docker/Dockerfile` (ROS 2 Lyrical, Ubuntu 24.04, CUDA 13) |
 | Launch files | Isaac Sim, RealSense, ZED, multi-camera, core | standalone node, `cam2_stereo_imu.launch.py` |
@@ -94,6 +97,37 @@ This file records every change made to it. Update it with each change.
   CSV files (except the measured track times). Replay speed on the PC: about 85-90 frames/s
   offline, 155 frames/s realtime (bags recorded at 15 fps).
 
+**Lifecycle node and simulated online replay** (`d164dc7`)
+- `VisualSlamNode` is a `rclcpp_lifecycle::LifecycleNode`. Parameters are declared in the
+  constructor and read at every `configure`, which also checks the cuVSLAM version, the modes
+  and the GPU (explicit error with hints for containers and Jetson device permissions) and
+  creates the interfaces and the tracker. `activate` processes input, `deactivate` drops it
+  (tracker and map kept), `cleanup` writes the run output, saves the map if requested and
+  destroys everything. Invalid parameters make `configure` fail instead of exiting.
+- `autostart` parameter (default `true`): the node configures and activates itself when it
+  starts spinning, as the Isaac ROS node does; launch files and scripts are unchanged.
+- The run output is not written when no frame was processed (an empty cycle does not
+  overwrite a previous run). A second run after `cleanup`/`configure` with the same
+  `run_output_dir` does overwrite the first one.
+- `pq_cuvslam_replay --rate R`: simulated online replay. Messages arrive at their recorded
+  times in keep-last queues with the history depth of the node subscriptions, so frames not
+  processed in time are dropped as with live subscriptions. Received and dropped messages per
+  topic are written to `run_info.json` (`replay`).
+- Latency emulation: `latency_profile` (`status.csv` of a run on the target platform, or
+  `frames.csv` of the Isaac ROS benchmark) or `emulated_latency_ms`. After each frame the node
+  waits until the frame has taken as long as on the target platform; frames of the same bag
+  are matched by timestamp, the others draw a time from the profile. Statistics in
+  `run_info.json` (`latency_emulation`).
+- `status.csv` has a new last column `callback_time_ms` (whole frame callback, measured
+  without the emulation), to build latency profiles.
+- Launch arguments `rate`, `latency_profile`, `emulated_latency_ms`; new dependencies
+  `rclcpp_lifecycle`, `lifecycle_msgs`.
+- Verified: deterministic replay output unchanged; live run with `ros2 bag play` and
+  `ros2 lifecycle` transitions (deactivate, cleanup, reconfigure, failing configure with an
+  invalid parameter); simulated online replay of `building_in_108` with the Jetson profile
+  (no drops: median 4.7 ms per frame on the Orin Nano) and with 100 ms per frame (223 of 300
+  frames processed).
+
 ## Notes
 
 - Frames processed: only complete stereo pairs reach the tracker (e.g. `loop_closure`: 826
@@ -101,6 +135,10 @@ This file records every change made to it. Update it with each change.
   first, which arrives before the tracker is initialized (as in the live node), and the
   last, which waits for a later IMU message.
 
+- IMU queue: with the default QoS (keep-last 10, i.e. 50 ms at 200 Hz) a frame that takes
+  more than about 50 ms makes the IMU queue overflow; in the 100 ms stress test 4233 of 4264
+  IMU messages were dropped. The same happens with live subscriptions: on a slow platform
+  `imu_qos_depth` should be increased.
 - `slam_poses.csv` of the Isaac ROS reference runs (`extract_paths.py`, last `slam_path`
   message) is the sequence of per-frame SLAM poses, capped at `path_max_size` (1024). The
   equivalent file here is `slam_online.csv`; `slam_poses.csv` is the final optimized trajectory
