@@ -19,6 +19,7 @@ This file records every change made to it. Update it with each change.
 | Node type | `rclcpp::Node` | lifecycle node (`configure`/`activate`/`deactivate`/`cleanup`), `autostart` |
 | Startup errors | `exit()` / "no CUDA-capable device" | `configure` fails with an explicit message (version, modes, GPU) |
 | Processing mode | realtime only (async BA and SLAM) | `processing_mode`: `realtime` (default) or `offline` (reproducible) |
+| Multi-camera sync | images grouped by timestamp, rig frame at the latest stamp | per-device pairing (nearest frame) + gyroscope rotation compensation (`sync` in the profile) |
 | Bag input | `ros2 bag play` at real-time speed | also `pq_cuvslam_replay`: deterministic (every frame) or simulated online (`--rate`) |
 | Latency emulation | none | `latency_profile` / `emulated_latency_ms`: frames take as long as on the target platform |
 | Run output | topics only | also CSV + `run_info.json` (`run_output_dir`), format of `run_output.py` |
@@ -162,6 +163,25 @@ This file records every change made to it. Update it with each change.
   on consecutive frames, and gyroscope - image time offset scan.
 - `tools/analyze_images.py`: saturation, dark pixels and projector dot density per IR stream.
 
+**Software sync between devices** (`479b7e9`)
+- Profile: `cameras[].device` and a `sync` section (`none` / `software` / `hardware`,
+  `max_offset_ms`, `rotation_compensation`, `compensation_border_px`, devices with gyroscope
+  and clock offset).
+- `DeviceFrameSynchronizer`: images grouped per device, then each reference frame (cam2) paired
+  with the nearest frame of the other devices; the chosen frame is not consumed (with missing
+  frames, consuming it shifted all the following pairs by one frame); stale and incomplete
+  device frames dropped; rig frame at the reference timestamp.
+- Rotation compensation: images of the other devices warped to the reference capture time with
+  `H = K dR^T K^-1` (gyroscope of their device), border excluded from tracking.
+- `status.csv` column `sync_offset_ms`, `run_info.json` section `sync`. `cam1_cam2_ir` uses
+  software sync with compensation by default. New dependency: OpenCV (core, imgproc).
+- `tools/gyro_consistency.py`: ground-truth-free check (odometry rotation vs gyroscope).
+- Evaluation on 13 bags (deterministic replay, rotation error vs gyroscope, RMS per frame):
+  lower with compensation on 9 bags (`build_in_out` 0.258 -> 0.092 deg, `build_out_in`
+  0.267 -> 0.102, `staircase_fix_1` 0.385 -> 0.247, `low_detail` 0.827 -> 0.579), about the
+  same on 3, higher on `building_in_108` (0.787 -> 0.876). Pairing without compensation alone
+  is not better than the Isaac ROS grouping.
+
 ## Notes
 
 - Frames processed: only complete stereo pairs reach the tracker (e.g. `loop_closure`: 826
@@ -173,6 +193,9 @@ This file records every change made to it. Update it with each change.
   more than about 50 ms makes the IMU queue overflow; in the 100 ms stress test 4233 of 4264
   IMU messages were dropped. The same happens with live subscriptions: on a slow platform
   `imu_qos_depth` should be increased.
+- Recorded bags (see `tools/`): the first message of every image stream has a stale stamp
+  (21-486 s old); most "15 fps" bags are on a 30 fps grid with about half of the frames missing
+  (intervals of 33, 67 and 100 ms); several bags have saturated IR or the IR projector on.
 - `slam_poses.csv` of the Isaac ROS reference runs (`extract_paths.py`, last `slam_path`
   message) is the sequence of per-frame SLAM poses, capped at `path_max_size` (1024). The
   equivalent file here is `slam_online.csv`; `slam_poses.csv` is the final optimized trajectory
