@@ -34,8 +34,8 @@ import sys
 
 import cv2
 import numpy as np
-import rosbag2_py
 from rclpy.serialization import deserialize_message
+import rosbag2_py
 from sensor_msgs.msg import Image
 
 STREAMS = [f'/{cam}/{ir}/image_rect_raw' for cam in ('cam1', 'cam2') for ir in ('infra1', 'infra2')]

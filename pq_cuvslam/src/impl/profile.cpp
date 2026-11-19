@@ -191,7 +191,7 @@ Profile LoadProfile(const std::string & path)
 
   static const std::set<std::string> kKeys = {
     "name", "description", "mode", "base_frame", "cameras", "imu", "depth", "extrinsics",
-    "hardware", "parameters"};
+    "sync", "hardware", "parameters"};
   for (const auto & item : root) {
     const std::string key = item.first.as<std::string>();
     if (kKeys.count(key) == 0) {
@@ -215,6 +215,7 @@ Profile LoadProfile(const std::string & path)
     const std::string w = "cameras[" + std::to_string(i) + "].";
     ProfileCamera c;
     c.name = r.String(cameras[i], "name", w);
+    c.device = r.String(cameras[i], "device", w, false);
     c.image_topic = r.String(cameras[i], "image_topic", w);
     c.camera_info_topic = r.String(cameras[i], "camera_info_topic", w);
     c.optical_frame = r.String(cameras[i], "optical_frame", w);
@@ -255,6 +256,48 @@ Profile LoadProfile(const std::string & path)
       p.extrinsics.push_back(
         ParseTransform(r, extrinsics[i], "extrinsics[" + std::to_string(i) + "]."));
     }
+  }
+
+  if (const YAML::Node sync = root["sync"]; sync && !sync.IsNull()) {
+    ProfileSync s;
+    s.mode_name = r.String(sync, "mode", "sync.");
+    if (s.mode_name == "none") {
+      s.mode = SyncMode::NONE;
+    } else if (s.mode_name == "software") {
+      s.mode = SyncMode::SOFTWARE;
+    } else if (s.mode_name == "hardware") {
+      s.mode = SyncMode::HARDWARE;
+    } else {
+      r.Fail("sync.mode", "'" + s.mode_name + "' is not one of none, software, hardware");
+    }
+    s.max_offset_ms = s.mode == SyncMode::HARDWARE ? 2.0 : 34.0;
+    if (sync["max_offset_ms"]) {
+      s.max_offset_ms = r.Number(sync, "max_offset_ms", "sync.");
+    }
+    if (sync["rotation_compensation"]) {
+      s.rotation_compensation =
+        r.As<bool>(sync["rotation_compensation"], "sync.rotation_compensation");
+    }
+    if (sync["compensation_border_px"]) {
+      s.compensation_border_px =
+        r.As<int>(sync["compensation_border_px"], "sync.compensation_border_px");
+    }
+    const YAML::Node devices = r.Required(sync, "devices", "sync.");
+    if (!devices.IsSequence()) {
+      r.Fail("sync.devices", "expected a list");
+    }
+    for (size_t i = 0; i < devices.size(); ++i) {
+      const std::string w = "sync.devices[" + std::to_string(i) + "].";
+      ProfileSyncDevice d;
+      d.name = r.String(devices[i], "name", w);
+      d.imu_topic = r.String(devices[i], "imu_topic", w, false);
+      d.imu_frame = r.String(devices[i], "imu_frame", w, false);
+      if (devices[i]["clock_offset_ms"]) {
+        d.clock_offset_ms = r.Number(devices[i], "clock_offset_ms", w);
+      }
+      s.devices.push_back(d);
+    }
+    p.sync = s;
   }
 
   if (const YAML::Node hw = root["hardware"]; hw && !hw.IsNull()) {
@@ -389,6 +432,37 @@ ProfileCheck CheckProfile(const Profile & p, int cuvslam_major)
       check.errors.push_back("duplicate image topic " + c.image_topic);
     }
   }
+  if (p.sync && p.sync->mode != SyncMode::NONE) {
+    const ProfileSync & s = *p.sync;
+    std::set<std::string> devices;
+    for (const auto & d : s.devices) {
+      if (!devices.insert(d.name).second) {
+        check.errors.push_back("sync: duplicate device " + d.name);
+      }
+      if (s.rotation_compensation && (d.imu_topic.empty() || d.imu_frame.empty())) {
+        check.errors.push_back(
+          "sync.rotation_compensation needs imu_topic and imu_frame for device " + d.name);
+      }
+    }
+    for (const auto & c : p.cameras) {
+      if (c.device.empty()) {
+        check.errors.push_back("sync: camera " + c.name + " has no device");
+      } else if (devices.count(c.device) == 0) {
+        check.errors.push_back(
+          "sync: device " + c.device + " of camera " + c.name + " is not in sync.devices");
+      }
+    }
+    if (s.devices.size() < 2) {
+      check.warnings.push_back("sync: fewer than two devices, nothing to synchronize");
+    }
+    if (s.max_offset_ms <= 0.0) {
+      check.errors.push_back("sync.max_offset_ms must be positive");
+    }
+    if (s.mode == SyncMode::HARDWARE && s.rotation_compensation) {
+      check.warnings.push_back("sync: rotation compensation is not needed in hardware mode");
+    }
+  }
+
   for (const auto & t : p.extrinsics) {
     if (t.parent == t.child) {
       check.errors.push_back("extrinsic with parent == child (" + t.parent + ")");

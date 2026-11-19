@@ -87,7 +87,12 @@ public:
     const std::optional<tf2::Transform> & odom_pose,
     const std::optional<tf2::Transform> & slam_pose,
     double track_time_ms, size_t num_landmarks,
-    const std::vector<size_t> & observations_per_camera, double callback_time_ms);
+    const std::vector<size_t> & observations_per_camera, double callback_time_ms,
+    std::optional<double> sync_offset_ms = std::nullopt);
+
+  // Adds the column sync_offset_ms to status.csv (capture time difference between the devices
+  // of the rig frame). Call before the first frame.
+  void EnableSyncOffsetColumn() {sync_offset_column_ = true;}
 
   void AddSlamMetrics(int64_t timestamp_ns, const cuvslam::Slam::Metrics & metrics);
 
@@ -105,6 +110,7 @@ private:
 
   std::string out_dir_;
   size_t num_cameras_;
+  bool sync_offset_column_ = false;
   std::optional<tf2::Transform> odom_ref_;
   std::optional<tf2::Transform> slam_ref_;
   std::vector<Row> odometry_;

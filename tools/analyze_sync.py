@@ -35,8 +35,8 @@ import struct
 import sys
 
 import numpy as np
-import rosbag2_py
 from rclpy.serialization import deserialize_message
+import rosbag2_py
 from sensor_msgs.msg import Imu
 
 CAMERAS = ('cam1', 'cam2')
@@ -215,7 +215,8 @@ def print_report(r):
     g = r.get('gyro_offset_ms')
     if g:
         print(f"  gyro clock cam1-cam2: {fmt(g.get('lag_ms'))} ms (corr {fmt(g.get('correlation'))}), "
-              f"windows {g.get('windows', 0)}: {fmt(g.get('window_lag_min'))}..{fmt(g.get('window_lag_max'))} ms, "
+              f"windows {g.get('windows', 0)}: "
+              f"{fmt(g.get('window_lag_min'))}..{fmt(g.get('window_lag_max'))} ms, "
               f"drift {fmt(g.get('drift_ms_per_s'), 3)} ms/s")
 
 

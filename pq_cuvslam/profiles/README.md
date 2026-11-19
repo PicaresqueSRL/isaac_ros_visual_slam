@@ -34,6 +34,7 @@ base_frame: cam2_link                 # frame whose poses are published
 
 cameras:                              # order = cuVSLAM camera index; stereo pair: left, right
   - name: cam2_ir1                    # unique
+    device: cam2                      # physical camera; required with sync
     image_topic: /cam2/infra1/image_rect_raw
     camera_info_topic: /cam2/infra1/camera_info
     optical_frame: cam2_infra1_optical_frame   # overrides the frame of the camera_info
@@ -65,6 +66,18 @@ extrinsics:                           # transforms missing from the TF of the da
     source: CAD + gyroscope estimate           # required
     date: null
 
+sync:                                 # between devices (multicamera mode); optional
+  mode: software                      # none | software | hardware
+  max_offset_ms: 34.0                 # max capture time difference of paired frames
+                                      # (default 34 for software, 2 for hardware)
+  rotation_compensation: true         # software only: warp to the reference capture time
+  compensation_border_px: 16          # border excluded from tracking on warped images
+  devices:                            # first = reference device (rig frame timestamps)
+    - name: cam2
+      imu_topic: /cam2/imu            # gyroscope, needed for rotation_compensation
+      imu_frame: cam2_gyro_optical_frame
+      clock_offset_ms: 0.0            # subtracted from the stamps of this device
+
 hardware:
   ir_emitter: false                   # D455 IR projector during the recording (warning if true)
 
@@ -78,6 +91,26 @@ The profile sets these node parameters: `tracking_mode` (from `mode`), `base_fra
 `imu_frame`, the noise parameters and `calibration_frequency`; with `depth`:
 `depth_camera_id`, `depth_scale_factor`, `depth_enable_stereo_tracking`; then everything in
 `parameters` (an unknown parameter name is an error).
+
+## Synchronization between devices
+
+Two D455 that are not triggered together capture at slightly different rates: the capture
+time difference changes slowly along the recording and reaches half a frame (33 ms at 15 fps).
+cuVSLAM needs the images of a rig frame to be simultaneous.
+
+- `none`: images grouped by timestamp within `sync_matching_threshold_ms` (Isaac ROS
+  behaviour); the rig frame takes the latest stamp.
+- `software`: the images of each device are grouped first (IR1 and IR2 share the shutter);
+  then each frame of the reference device is paired with the nearest frame of every other
+  device within `max_offset_ms` (a frame can serve two reference frames when frames are
+  missing); the stale first frame of the driver is discarded. With `rotation_compensation`
+  the images of the other devices are warped to the reference capture time with the rotation
+  integrated from their gyroscope (homography `K dR^T K^-1`; translation not compensated),
+  and their border is excluded from tracking. The rig frame takes the reference timestamp.
+- `hardware`: same pairing with a tight threshold, for cameras triggered by the sync cable.
+
+`status.csv` gets a `sync_offset_ms` column and `run_info.json` a `sync` section (pairs,
+dropped frames, offsets, compensated rotation).
 
 ## Checks
 

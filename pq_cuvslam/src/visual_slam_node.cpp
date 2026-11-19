@@ -327,6 +327,22 @@ void VisualSlamNode::CreateInterfaces()
       std::bind(&VisualSlamNode::CallbackImu, this, std::placeholders::_1));
   }
 
+  // Gyroscopes of the synchronized devices, for the rotation compensation.
+  sync_imu_subs_.clear();
+  if (profile_ && profile_->sync && profile_->sync->mode == SyncMode::SOFTWARE &&
+    profile_->sync->rotation_compensation)
+  {
+    for (size_t d = 0; d < profile_->sync->devices.size(); ++d) {
+      const int device = static_cast<int>(d);
+      sync_imu_subs_.emplace_back(
+        device, create_subscription<ImuType>(
+          profile_->sync->devices[d].imu_topic, imu_qos_,
+          [this, device](const ImuType::ConstSharedPtr & msg) {
+            CallbackSyncImu(device, msg);
+          }));
+    }
+  }
+
   {
     rclcpp::SubscriptionOptions options;
     options.callback_group = localize_in_map_callback_group_;
@@ -419,6 +435,7 @@ void VisualSlamNode::DestroyInterfaces()
   depth_image_subs_.clear();
   camera_info_subs_.clear();
   imu_sub_.reset();
+  sync_imu_subs_.clear();
   initial_pose_sub_.reset();
 
   visual_slam_status_pub_.reset();
@@ -671,6 +688,20 @@ std::string VisualSlamNode::GetImuTopic() const
   return imu_sub_ ? imu_sub_->get_topic_name() : "";
 }
 
+std::vector<std::pair<int, std::string>> VisualSlamNode::GetSyncImuTopics() const
+{
+  std::vector<std::pair<int, std::string>> topics;
+  for (const auto & [device, sub] : sync_imu_subs_) {
+    topics.emplace_back(device, sub->get_topic_name());
+  }
+  return topics;
+}
+
+void VisualSlamNode::InputSyncImu(int device, const ImuType::ConstSharedPtr & msg)
+{
+  CallbackSyncImu(device, msg);
+}
+
 void VisualSlamNode::SetRunInput(const std::string & input)
 {
   if (impl_) {
@@ -852,6 +883,13 @@ void VisualSlamNode::CallbackImu(const ImuType::ConstSharedPtr & msg)
 {
   if (active_) {
     impl_->CallbackImu(msg);
+  }
+}
+
+void VisualSlamNode::CallbackSyncImu(int device, const ImuType::ConstSharedPtr & msg)
+{
+  if (active_) {
+    impl_->CallbackSyncImu(device, msg);
   }
 }
 

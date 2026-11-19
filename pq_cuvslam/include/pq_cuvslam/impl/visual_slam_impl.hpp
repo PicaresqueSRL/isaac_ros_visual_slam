@@ -38,11 +38,13 @@
 #include "cuvslam/ground_constraint2.h"
 #include "cv_bridge/cv_bridge.hpp"
 #include "pq_cuvslam/third_party/isaac_common/messaging/message_stream_synchronizer.hpp"
+#include "pq_cuvslam/impl/device_frame_synchronizer.hpp"
 #include "pq_cuvslam/impl/landmarks_vis_helper.hpp"
 #include "pq_cuvslam/impl/latency_emulator.hpp"
 #include "pq_cuvslam/impl/limited_vector.hpp"
 #include "pq_cuvslam/impl/localizer_vis_helper.hpp"
 #include "pq_cuvslam/impl/message_stream_sequencer.hpp"
+#include "pq_cuvslam/impl/motion_compensation.hpp"
 #include "pq_cuvslam/impl/pose_cache.hpp"
 #include "pq_cuvslam/impl/posegraph_vis_helper.hpp"
 #include "pq_cuvslam/impl/run_output.hpp"
@@ -115,6 +117,13 @@ struct VisualSlamNode::VisualSlamImpl
   void CallbackImage(int index, const ImageType & image_view);
   void CallbackCameraInfo(int index, const CameraInfoType::ConstSharedPtr & msg);
 
+  // Gyroscope of a synchronized device (rotation compensation).
+  void CallbackSyncImu(int device, const ImuType::ConstSharedPtr & msg);
+
+  // Rig frame of the device synchronizer: rotation compensation, then the sequencer.
+  using DeviceSync = DeviceFrameSynchronizer<ImageType>;
+  void OnRigFrame(const DeviceSync::RigFrame & frame);
+
   // Callback for synchronizer.
   void CallbackSynchronizedImages(
     int64_t current_ts, const std::vector<std::pair<int, ImageType>> & idx_and_image_msgs);
@@ -162,6 +171,25 @@ struct VisualSlamNode::VisualSlamImpl
   // Synchronizer used to sync all image messages.
   using Synchronizer = nvidia::isaac_common::messaging::MessageStreamSynchronizer<ImageType>;
   Synchronizer sync;
+
+  // Device synchronizer (profile sync mode software or hardware), used instead of sync.
+  std::unique_ptr<DeviceSync> device_sync;
+  bool rotation_compensation = false;
+  std::vector<int64_t> device_clock_offset_ns;  // per device
+  std::vector<int> camera_device;               // device index per camera
+  std::vector<GyroBuffer> device_gyro;          // per device, corrected stamps
+  std::vector<Eigen::Matrix3d> camera_K;        // per camera, set at initialization
+  std::vector<Eigen::Matrix3d> camera_R_imu;    // per camera: rotation imu -> optical frame
+  bool compensation_ready = false;
+  struct SyncStats
+  {
+    std::vector<double> offsets_ms;     // max |offset| of the devices, per rig frame
+    std::vector<double> rotations_deg;  // compensated rotation, per compensated image
+    uint64_t compensated_images = 0;
+    uint64_t gyro_missing = 0;          // images not compensated: gyroscope not available
+  } sync_stats;
+  // Capture offset of the rig frames, by reference stamp, for the run output.
+  std::map<int64_t, double> frame_sync_offset_ms;
 
   // Sequencer used to sequence imu and image messages.
   using Sequencer = MessageStreamSequencer<ImuType::ConstSharedPtr,

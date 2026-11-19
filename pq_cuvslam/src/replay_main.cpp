@@ -138,6 +138,8 @@ struct InputMessage
   std::shared_ptr<const sensor_msgs::msg::Image> image;
   std::shared_ptr<const sensor_msgs::msg::CameraInfo> camera_info;
   std::shared_ptr<const sensor_msgs::msg::Imu> imu;
+  bool vio_imu = false;              // IMU of the visual-inertial odometry
+  std::vector<int> sync_devices;     // devices whose gyroscope this IMU topic is
   uint64_t sequence = 0;  // arrival order
 };
 
@@ -146,7 +148,14 @@ void Deliver(VisualSlamNode & node, const InputMessage & msg)
   switch (msg.kind) {
     case InputMessage::Kind::IMAGE: node.InputImage(msg.index, msg.image); break;
     case InputMessage::Kind::CAMERA_INFO: node.InputCameraInfo(msg.index, msg.camera_info); break;
-    case InputMessage::Kind::IMU: node.InputImu(msg.imu); break;
+    case InputMessage::Kind::IMU:
+      if (msg.vio_imu) {
+        node.InputImu(msg.imu);
+      }
+      for (const int device : msg.sync_devices) {
+        node.InputSyncImu(device, msg.imu);
+      }
+      break;
   }
 }
 
@@ -167,6 +176,10 @@ public:
     imu_ = node.GetImuTopic();
     if (!imu_.empty()) {
       depth_[imu_] = node.GetImuQueueDepth();
+    }
+    for (const auto & [device, topic] : node.GetSyncImuTopics()) {
+      sync_imu_[topic].push_back(device);
+      depth_[topic] = node.GetImuQueueDepth();
     }
     frame_topic_ = node.GetImageTopics().front().second;
   }
@@ -195,6 +208,10 @@ public:
     } else {
       msg.kind = InputMessage::Kind::IMU;
       msg.imu = Deserialize<sensor_msgs::msg::Imu>(bag_msg);
+      msg.vio_imu = topic == imu_;
+      if (const auto it = sync_imu_.find(topic); it != sync_imu_.end()) {
+        msg.sync_devices = it->second;
+      }
     }
     return msg;
   }
@@ -206,6 +223,7 @@ private:
   std::map<std::string, int> images_;
   std::map<std::string, int> camera_infos_;
   std::string imu_;
+  std::map<std::string, std::vector<int>> sync_imu_;
   std::map<std::string, size_t> depth_;
   std::string frame_topic_;
 };

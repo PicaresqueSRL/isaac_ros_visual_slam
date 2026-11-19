@@ -115,6 +115,10 @@ public:
   std::vector<std::pair<int, std::string>> GetCameraInfoTopics() const;
   // Empty when the IMU is not used.
   std::string GetImuTopic() const;
+  // Gyroscope topics of the synchronized devices (device index, topic); empty without
+  // rotation compensation.
+  std::vector<std::pair<int, std::string>> GetSyncImuTopics() const;
+  void InputSyncImu(int device, const ImuType::ConstSharedPtr & msg);
   // History depth of the image (also camera info) and IMU subscriptions.
   size_t GetImageQueueDepth() const {return image_qos_.depth();}
   size_t GetImuQueueDepth() const {return imu_qos_.depth();}
@@ -365,6 +369,8 @@ private:
   depth_image_subs_;
   std::vector<rclcpp::Subscription<CameraInfoType>::SharedPtr> camera_info_subs_;
   rclcpp::Subscription<ImuType>::SharedPtr imu_sub_;
+  // Gyroscopes of the synchronized devices (software sync with rotation compensation).
+  std::vector<std::pair<int, rclcpp::Subscription<ImuType>::SharedPtr>> sync_imu_subs_;
   rclcpp::Subscription<PoseWithCovarianceStampedType>::SharedPtr initial_pose_sub_;
 
   // Publishers: Visual SLAM
@@ -429,6 +435,7 @@ private:
 
   // Callback functions for subscribers.
   void CallbackImu(const ImuType::ConstSharedPtr & msg);
+  void CallbackSyncImu(int device, const ImuType::ConstSharedPtr & msg);
   void CallbackImage(int index, const ImageType & msg);
   void CallbackCameraInfo(int index, const CameraInfoType::ConstSharedPtr & msg);
   void CallbackInitialPose(const PoseWithCovarianceStampedType::ConstSharedPtr & msg);

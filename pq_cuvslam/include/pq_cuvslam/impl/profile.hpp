@@ -54,6 +54,7 @@ enum class ProfileMode
 struct ProfileCamera
 {
   std::string name;
+  std::string device;  // physical camera (e.g. cam2); cameras of one device share the shutter
   std::string image_topic;
   std::string camera_info_topic;
   std::string optical_frame;
@@ -90,6 +91,32 @@ struct ProfileTransform
   std::string date;
 };
 
+// Synchronization between devices (e.g. two D455 on a rigid mount).
+enum class SyncMode
+{
+  NONE,      // images grouped by timestamp only (Isaac ROS behaviour)
+  SOFTWARE,  // nearest frame of each device to the reference device, optional rotation compensation
+  HARDWARE   // devices triggered together (D455 master/slave): tight threshold, no compensation
+};
+
+struct ProfileSyncDevice
+{
+  std::string name;
+  std::string imu_topic;   // gyroscope used for the rotation compensation
+  std::string imu_frame;
+  double clock_offset_ms = 0.0;  // subtracted from the stamps of this device
+};
+
+struct ProfileSync
+{
+  SyncMode mode = SyncMode::NONE;
+  std::string mode_name = "none";
+  double max_offset_ms = 0.0;        // max capture time difference between paired frames
+  bool rotation_compensation = false;
+  int compensation_border_px = 0;    // image border excluded from tracking when compensating
+  std::vector<ProfileSyncDevice> devices;  // first = reference device
+};
+
 struct Profile
 {
   std::string path;
@@ -102,6 +129,7 @@ struct Profile
   std::optional<ProfileImu> imu;
   std::optional<ProfileDepth> depth;
   std::vector<ProfileTransform> extrinsics;
+  std::optional<ProfileSync> sync;
   std::optional<bool> ir_emitter;  // D455 IR projector state during the recording
   // Other node parameters (section "parameters"), in file order.
   std::vector<std::pair<std::string, YAML::Node>> parameters;

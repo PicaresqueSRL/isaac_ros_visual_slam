@@ -34,6 +34,7 @@ reserved.
   <depend>cv_bridge</depend>
   <depend>diagnostic_msgs</depend>
   <depend>geometry_msgs</depend>
+  <depend>libopencv-dev</depend>
   <depend>isaac_ros_visual_slam_interfaces</depend>
   <depend>nav_msgs</depend>
   <depend>ament_index_cpp</depend>

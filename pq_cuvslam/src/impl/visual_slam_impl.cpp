@@ -193,6 +193,46 @@ VisualSlamNode::VisualSlamImpl::VisualSlamImpl(VisualSlamNode & vslam_node)
     tf_static_publisher->sendTransform(transforms);
   }
 
+  // Device synchronization from the profile (two or more devices, multicamera mode).
+  if (node.profile_ && node.profile_->sync && node.profile_->sync->mode != SyncMode::NONE &&
+    node.profile_->sync->devices.size() >= 2)
+  {
+    const ProfileSync & s = *node.profile_->sync;
+    if (node.tracking_mode_ != static_cast<int>(TrackingMode::MULTICAMERA) ||
+      node.num_input_masks_ > 0)
+    {
+      throw std::invalid_argument(
+              "profile sync between devices is supported in multicamera mode without masks only");
+    }
+    DeviceSync::Config config;
+    config.devices.resize(s.devices.size());
+    camera_device.assign(node.num_cameras_, 0);
+    for (size_t i = 0; i < node.profile_->cameras.size(); ++i) {
+      for (size_t d = 0; d < s.devices.size(); ++d) {
+        if (node.profile_->cameras[i].device == s.devices[d].name) {
+          config.devices[d].push_back(static_cast<int>(i));
+          camera_device[i] = static_cast<int>(d);
+        }
+      }
+    }
+    for (const auto & d : s.devices) {
+      device_clock_offset_ns.push_back(static_cast<int64_t>(std::llround(d.clock_offset_ms * 1e6)));
+    }
+    config.clock_offset_ns = device_clock_offset_ns;
+    config.max_offset_ns = static_cast<int64_t>(std::llround(s.max_offset_ms * 1e6));
+    device_sync = std::make_unique<DeviceSync>(config);
+    device_sync->RegisterCallback([this](const DeviceSync::RigFrame & f) {OnRigFrame(f);});
+    rotation_compensation = s.mode == SyncMode::SOFTWARE && s.rotation_compensation;
+    device_gyro.resize(s.devices.size());
+    if (run_output) {
+      run_output->EnableSyncOffsetColumn();
+    }
+    RCLCPP_INFO(
+      node.get_logger(), "Device sync: %s, %zu devices, max offset %.1f ms, rotation "
+      "compensation %s", s.mode_name.c_str(), s.devices.size(), s.max_offset_ms,
+      rotation_compensation ? "on" : "off");
+  }
+
   // Throws if the profile cannot be read: the configuration fails.
   if (!node.latency_profile_.empty()) {
     latency_emulator = LatencyEmulator::FromProfile(node.latency_profile_);
@@ -282,6 +322,11 @@ void VisualSlamNode::VisualSlamImpl::Initialize()
   // extrinsics). Otherwise wait: initialization is retried with the next camera info.
   {
     std::vector<std::string> needed = camera_optical_frames;
+    if (rotation_compensation) {
+      for (const auto & d : node.profile_->sync->devices) {
+        needed.push_back(d.imu_frame);
+      }
+    }
     if (node.tracking_mode_ == static_cast<int>(TrackingMode::VIO)) {
       needed.push_back(
         !node.imu_frame_.empty() ? node.imu_frame_ :
@@ -366,6 +411,38 @@ void VisualSlamNode::VisualSlamImpl::Initialize()
       cam.border_left = std::clamp(roi.x_offset, 0U, img_width);
       cam.border_right = std::clamp(img_width - roi.x_offset - roi.width, 0U, img_width);
     }
+
+    // Compensated images have empty (black) borders: keep features away from them.
+    if (rotation_compensation && camera_device[i] != 0) {
+      const uint32_t margin = static_cast<uint32_t>(
+        std::max(0, node.profile_->sync->compensation_border_px));
+      cam.border_top = std::min(cam.border_top + margin, img_height);
+      cam.border_bottom = std::min(cam.border_bottom + margin, img_height);
+      cam.border_left = std::min(cam.border_left + margin, img_width);
+      cam.border_right = std::min(cam.border_right + margin, img_width);
+    }
+  }
+
+  // Rotation compensation: intrinsics and IMU -> camera rotation of every camera.
+  if (rotation_compensation) {
+    camera_K.assign(node.num_cameras_, Eigen::Matrix3d::Identity());
+    camera_R_imu.assign(node.num_cameras_, Eigen::Matrix3d::Identity());
+    for (uint i = 0; i < node.num_cameras_; ++i) {
+      const auto & info = *initial_camera_info_messages.at(i).value();
+      // Rectified images: projection matrix P; otherwise K.
+      const bool use_p = node.rectified_images_ && info.p[0] != 0.0;
+      camera_K[i] << (use_p ? info.p[0] : info.k[0]), 0.0, (use_p ? info.p[2] : info.k[2]),
+        0.0, (use_p ? info.p[5] : info.k[4]), (use_p ? info.p[6] : info.k[5]),
+        0.0, 0.0, 1.0;
+      const std::string & imu_frame = node.profile_->sync->devices[camera_device[i]].imu_frame;
+      const tf2::Matrix3x3 R = GetLatestTransform(camera_optical_frames[i], imu_frame).getBasis();
+      for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 3; ++c) {
+          camera_R_imu[i](r, c) = R[r][c];
+        }
+      }
+    }
+    compensation_ready = true;
   }
 
   // Create the IMU configuration. If the IMU is disabled we just use the identity transform.
@@ -767,7 +844,11 @@ void VisualSlamNode::VisualSlamImpl::CallbackImage(int index, const ImageType & 
 
   if (IsInitialized()) {
     const rclcpp::Time timestamp(image->header.stamp);
-    sync.AddMessage(index, timestamp.nanoseconds(), image);
+    if (device_sync) {
+      device_sync->Add(index, timestamp.nanoseconds(), image);
+    } else {
+      sync.AddMessage(index, timestamp.nanoseconds(), image);
+    }
   }
 }
 
@@ -781,6 +862,66 @@ void VisualSlamNode::VisualSlamImpl::CallbackCameraInfo(
     initial_camera_info_messages[index] = msg;
     if (IsReadyForInitialization()) {Initialize();}
   }
+}
+
+void VisualSlamNode::VisualSlamImpl::CallbackSyncImu(
+  int device, const ImuType::ConstSharedPtr & msg)
+{
+  if (device < 0 || device >= static_cast<int>(device_gyro.size())) {
+    return;
+  }
+  const rclcpp::Time t(msg->header.stamp);
+  const auto & w = msg->angular_velocity;
+  device_gyro[device].Add(
+    t.nanoseconds() - device_clock_offset_ns[device], Eigen::Vector3d(w.x, w.y, w.z));
+}
+
+void VisualSlamNode::VisualSlamImpl::OnRigFrame(const DeviceSync::RigFrame & frame)
+{
+  // The rig frame takes the (uncorrected) stamp of the reference device.
+  const int64_t stamp = frame.reference_stamp_ns + device_clock_offset_ns[0];
+  double max_offset_ms = 0.0;
+  for (size_t d = 1; d < frame.device_stamps_ns.size(); ++d) {
+    max_offset_ms = std::max(
+      max_offset_ms, std::abs(frame.device_stamps_ns[d] - frame.reference_stamp_ns) / 1e6);
+  }
+  sync_stats.offsets_ms.push_back(max_offset_ms);
+  frame_sync_offset_ms[stamp] = max_offset_ms;
+
+  std::vector<std::pair<int, ImageType>> images;
+  images.reserve(frame.images.size());
+  for (const auto & [camera, msg] : frame.images) {
+    const int d = camera_device[camera];
+    if (d == 0) {
+      images.emplace_back(camera, msg);
+      continue;
+    }
+    // Other devices: warp to the reference time (rotation compensation), or only restamp.
+    Eigen::Matrix3d H = Eigen::Matrix3d::Identity();
+    if (rotation_compensation && compensation_ready) {
+      const auto dR_imu = device_gyro[d].Integrate(
+        frame.device_stamps_ns[d], frame.reference_stamp_ns);
+      if (dR_imu) {
+        const Eigen::Matrix3d dR = CameraRotation(camera_R_imu[camera], *dR_imu);
+        H = RotationHomography(camera_K[camera], dR);
+        sync_stats.rotations_deg.push_back(RotationAngleDeg(dR));
+        ++sync_stats.compensated_images;
+      } else {
+        ++sync_stats.gyro_missing;
+      }
+    }
+    ImageType out;
+    if (!H.isIdentity()) {
+      out = WarpImage(*msg, H, stamp);
+    }
+    if (!out) {
+      auto copy = std::make_shared<sensor_msgs::msg::Image>(*msg);
+      copy->header.stamp = rclcpp::Time(stamp);
+      out = copy;
+    }
+    images.emplace_back(camera, out);
+  }
+  CallbackSynchronizedImages(stamp, images);
 }
 
 void VisualSlamNode::VisualSlamImpl::CallbackSynchronizedImages(
@@ -1435,9 +1576,17 @@ void VisualSlamNode::VisualSlamImpl::AddRunOutputFrame(
     RCLCPP_WARN_ONCE(node.get_logger(), "Run output: cannot read observations: %s", e.what());
   }
 
+  std::optional<double> sync_offset_ms;
+  if (device_sync) {
+    if (const auto it = frame_sync_offset_ms.find(timestamp_ns); it != frame_sync_offset_ms.end()) {
+      sync_offset_ms = it->second;
+    }
+    frame_sync_offset_ms.erase(
+      frame_sync_offset_ms.begin(), frame_sync_offset_ms.upper_bound(timestamp_ns));
+  }
   run_output->AddFrame(
     timestamp_ns, tracked, odom_pose, slam_pose, track_time_ms, num_landmarks, observations,
-    callback_time_ms);
+    callback_time_ms, sync_offset_ms);
 
   if (cuvslam_slam) {
     try {
@@ -1546,6 +1695,37 @@ void VisualSlamNode::VisualSlamImpl::WriteRunOutput()
       profile.Add("ir_emitter", *p.ir_emitter);
     }
     info.Add("profile", profile);
+  }
+  if (device_sync) {
+    const auto & st = device_sync->GetStats();
+    const auto summary = [](std::vector<double> v) {
+        JsonObject o;
+        if (v.empty()) {
+          return o;
+        }
+        std::sort(v.begin(), v.end());
+        o.Add("median", v[v.size() / 2]).Add("p95", v[static_cast<size_t>(0.95 * (v.size() - 1))])
+        .Add("max", v.back());
+        return o;
+      };
+    JsonObject sync;
+    sync.Add("mode", node.profile_->sync->mode_name)
+    .Add("max_offset_ms", node.profile_->sync->max_offset_ms)
+    .Add("rotation_compensation", rotation_compensation)
+    .Add("rig_frames", st.rig_frames)
+    .Add("incomplete_device_frames", st.incomplete_device_frames)
+    .Add("stale_device_frames", st.stale_device_frames)
+    .Add("late_device_frames", st.late_device_frames)
+    .Add("unmatched_reference_frames", st.unmatched_reference_frames)
+    .Add("unused_device_frames", st.unused_device_frames)
+    .Add("reused_device_frames", st.reused_device_frames)
+    .Add("offset_ms", summary(sync_stats.offsets_ms));
+    if (rotation_compensation) {
+      sync.Add("compensated_images", sync_stats.compensated_images)
+      .Add("images_without_gyroscope", sync_stats.gyro_missing)
+      .Add("rotation_deg", summary(sync_stats.rotations_deg));
+    }
+    info.Add("sync", sync);
   }
   for (const auto & [key, json] : run_info_extra) {
     info.AddRaw(key, json);

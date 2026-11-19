@@ -38,8 +38,8 @@ import argparse
 
 import cv2
 import numpy as np
-import rosbag2_py
 from rclpy.serialization import deserialize_message
+import rosbag2_py
 from sensor_msgs.msg import CameraInfo, Image, Imu
 from tf2_msgs.msg import TFMessage
 
@@ -61,6 +61,7 @@ def rodrigues(v):
 
 
 class StaticTf:
+
     def __init__(self):
         self.parent = {}
 

@@ -150,6 +150,7 @@ ament_auto_add_library(
   src/impl/landmarks_vis_helper.cpp
   src/impl/latency_emulator.cpp
   src/impl/localizer_vis_helper.cpp
+  src/impl/motion_compensation.cpp
   src/impl/pose_cache.cpp
   src/impl/profile.cpp
   src/impl/posegraph_vis_helper.cpp
@@ -159,9 +160,12 @@ ament_auto_add_library(
   src/impl/viz_helper.cpp
 )
 find_package(yaml-cpp REQUIRED)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc)
 target_link_libraries(visual_slam_node
   cuvslam
   yaml-cpp::yaml-cpp
+  opencv_core
+  opencv_imgproc
   Boost::thread
   Boost::chrono
   ${VISUAL_SLAM_LIBRARIES}
@@ -221,6 +225,14 @@ if(BUILD_TESTING)
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
   )
+
+  ament_add_gtest(${PROJECT_NAME}_test_device_frame_synchronizer
+    test/test_device_frame_synchronizer.cpp)
+  target_include_directories(${PROJECT_NAME}_test_device_frame_synchronizer PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+  ament_add_gtest(${PROJECT_NAME}_test_motion_compensation test/test_motion_compensation.cpp)
+  target_link_libraries(${PROJECT_NAME}_test_motion_compensation visual_slam_node)
 
   # Tests of the vendored isaac_common headers
   foreach(_test test_message_buffer test_message_stream_synchronizer)
