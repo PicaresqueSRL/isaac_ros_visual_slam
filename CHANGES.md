@@ -15,7 +15,8 @@ This file records every change made to it. Update it with each change.
 | Topics, services, TF | `/visual_slam/...`, `map -> odom -> base` | unchanged |
 | Isaac ROS dependencies | `isaac_ros_common`, `isaac_common`, `cuda_buffer` | none required; `cuda_buffer` optional |
 | Image transfer | zero-copy GPU (`cuda_buffer`) | GPU with `cuda_buffer`, host memory without (`USE_CUDA_BUFFER`) |
-| cuNLS | `USE_CUNLS=OFF` fixed | CMake option, default `OFF`; requires cuVSLAM >= 17 |
+| cuVSLAM version | 15.0 only (checked at startup) | 15, 16, 17 chosen at build time (`CUVSLAM_REF`), API differences in `impl/cuvslam_compat` |
+| cuNLS | `USE_CUNLS=OFF` fixed | `USE_CUNLS=AUTO`: on from cuVSLAM 17 |
 | Node type | `rclcpp::Node` | lifecycle node (`configure`/`activate`/`deactivate`/`cleanup`), `autostart` |
 | Startup errors | `exit()` / "no CUDA-capable device" | `configure` fails with an explicit message (version, modes, GPU) |
 | Processing mode | realtime only (async BA and SLAM) | `processing_mode`: `realtime` (default) or `offline` (reproducible) |
@@ -181,6 +182,23 @@ This file records every change made to it. Update it with each change.
   0.267 -> 0.102, `staircase_fix_1` 0.385 -> 0.247, `low_detail` 0.827 -> 0.579), about the
   same on 3, higher on `building_in_108` (0.787 -> 0.876). Pairing without compensation alone
   is not better than the Isaac ROS grouping.
+
+**cuVSLAM version selection and adaptation layer** (`8e4ebac`)
+- `-DCUVSLAM_REF=<tag|commit>` (FetchContent at configure time) or `-DCUVSLAM_SOURCE_DIR`;
+  default the submodule (15.0.0). Supported 15-17 (`PQ_CUVSLAM_ALLOW_UNSUPPORTED` to try
+  others). Version passed to the code as `PQ_CUVSLAM_VERSION_*`; `USE_CUNLS=AUTO`.
+  Dockerfile argument `CUVSLAM_REF`.
+- `impl/cuvslam_compat`: the only version-dependent code. 16: `SetSlamPose` removed (service
+  returns an error), new `LocalizeInMap`, localizer data layers removed (localizer
+  visualization with 15 only). 17: covariance layout, `Slam::Track` + `GetPose`.
+- Features logged at configure, run-time library checked against the build version (replaces
+  the exact 15.0 check), profile checks use the features; `run_info.json` records
+  `cuvslam_compiled` and `cuvslam_cunls`.
+- Verified on 15.0.0, 16.0.0, 17.0.1: builds, unit tests, three profiles on five bags,
+  determinism on 17; 15 output unchanged. Rotation error vs gyroscope (RMS per frame),
+  stereo IR + IMU: equal on clean bags, lower with 16/17 on harder ones (`loop_closure`
+  0.66 -> 0.47 deg, `building_in_108` 0.80 -> 0.61 deg, frames above 2 deg 17 -> 1 and 12 -> 1);
+  multicamera and RGBD about equal across versions.
 
 ## Notes
 
