@@ -357,7 +357,7 @@ std::vector<std::pair<std::string, YAML::Node>> ProfileParameters(const Profile 
   return out;
 }
 
-ProfileCheck CheckProfile(const Profile & p, int cuvslam_major)
+ProfileCheck CheckProfile(const Profile & p, int cuvslam_major, bool multisensor_available)
 {
   ProfileCheck check;
   const size_t n = p.cameras.size();
@@ -395,6 +395,9 @@ ProfileCheck CheckProfile(const Profile & p, int cuvslam_major)
         check.errors.push_back(
           "mode multisensor needs cuVSLAM >= 17; this build uses cuVSLAM " +
           std::to_string(cuvslam_major));
+      } else if (!multisensor_available) {
+        check.errors.push_back(
+          "mode multisensor needs cuVSLAM built with cuNLS (USE_CUNLS)");
       } else {
         check.errors.push_back("mode multisensor is not implemented in pq_cuvslam yet");
       }

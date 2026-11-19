@@ -156,12 +156,14 @@ VisualSlamNode::VisualSlamImpl::VisualSlamImpl(VisualSlamNode & vslam_node)
     LandmarksVisHelper::CM_RED_MODE, 16),
   pose_graph_helper(cuvslam::Slam::DataLayer::PoseGraph, 2048, 100),
   localizer_helper(8 * 2048, 100),
+#if PQ_CUVSLAM_HAS_LOCALIZER_LAYERS
   localizer_landmarks_vis_helper(cuvslam::Slam::DataLayer::LocalizerMap, 1024 * 32,
     LandmarksVisHelper::CM_GREEN_MODE, 16),
   localizer_observations_vis_helper(cuvslam::Slam::DataLayer::LocalizerLandmarks, 1024 * 32,
     LandmarksVisHelper::CM_WEIGHT_BW_MODE, 16),
   localizer_lc_landmarks_vis_helper(cuvslam::Slam::DataLayer::LocalizerLoopClosure, 2048,
     LandmarksVisHelper::CM_RED_MODE, 16),
+#endif
   track_execution_times(100),
   last_track_ts(-1)
 {
@@ -518,6 +520,7 @@ void VisualSlamNode::VisualSlamImpl::Initialize()
     localizer_helper.Init(
       node.vis_localizer_pub_, cuvslam_slam, canonical_pose_cuvslam, node.map_frame_,
       node.get_logger());
+#if PQ_CUVSLAM_HAS_LOCALIZER_LAYERS
     localizer_landmarks_vis_helper.Init(
       node.vis_localizer_landmarks_pub_, cuvslam_slam, canonical_pose_cuvslam, node.map_frame_,
       node.get_logger());
@@ -527,6 +530,7 @@ void VisualSlamNode::VisualSlamImpl::Initialize()
     localizer_lc_landmarks_vis_helper.Init(
       node.vis_localizer_loop_closure_pub_, cuvslam_slam, canonical_pose_cuvslam, node.map_frame_,
       node.get_logger());
+#endif
   }
   RCLCPP_INFO(node.get_logger(), "cuVSLAM tracker was successfully initialized.");
 
@@ -555,9 +559,11 @@ void VisualSlamNode::VisualSlamImpl::Exit()
   lc_landmarks_vis_helper.Exit();
   pose_graph_helper.Exit();
   localizer_helper.Exit();
+#if PQ_CUVSLAM_HAS_LOCALIZER_LAYERS
   localizer_landmarks_vis_helper.Exit();
   localizer_observations_vis_helper.Exit();
   localizer_lc_landmarks_vis_helper.Exit();
+#endif
 
   if (cuvslam_odometry != nullptr) {
     cuvslam_odometry.reset();
@@ -1103,7 +1109,7 @@ void VisualSlamNode::VisualSlamImpl::UpdatePose(
     if (node.enable_localization_n_mapping_) {
       try {
         cuvslam_odometry->GetState(odometry_state);
-        cuvslam::Pose slam_pose = cuvslam_slam->Track(odometry_state);
+        cuvslam::Pose slam_pose = compat::SlamTrack(*cuvslam_slam, odometry_state);
         cv_map_pose_cv_base_link = FromcuVSLAMPose(slam_pose);
       } catch (const std::exception & e) {
         RCLCPP_WARN(node.get_logger(), "Failed to get SLAM pose: %s", e.what());
@@ -1180,7 +1186,8 @@ void VisualSlamNode::VisualSlamImpl::UpdatePose(
       pose_n_cov->header = header_odom;
       pose_n_cov->pose.pose = vo_pose;
       auto covariance_transform =
-        FromcuVSLAMCovariance(vo_pose_estimate.world_from_rig.value().covariance);
+        FromcuVSLAMCovariance(
+        compat::PoseCovarianceRotationFirst(vo_pose_estimate.world_from_rig.value()));
       for (size_t i = 0; i < 6 * 6; i++) {
         pose_n_cov->pose.covariance[i] = covariance_transform(i);
       }
@@ -1439,17 +1446,18 @@ VisualSlamImpl::CuvslamInternalLocalizeInMapAsync(
   // The localization will use images from normal tracking operations
   std::vector<cuvslam::Image> empty_images;
 
-  cuvslam::Slam::LocalizationSettings localization_settings;
-  localization_settings.horizontal_search_radius = node.localizer_horizontal_radius_;
-  localization_settings.vertical_search_radius = node.localizer_vertical_radius_;
-  localization_settings.horizontal_step = node.localizer_horizontal_step_;
-  localization_settings.vertical_step = node.localizer_vertical_step_;
-  localization_settings.angular_step_rads = node.localizer_angular_step_;
-  localization_settings.enable_reading_internals = node.enable_slam_visualization_;
+  compat::LocalizationParams localization_params;
+  localization_params.horizontal_search_radius = node.localizer_horizontal_radius_;
+  localization_params.vertical_search_radius = node.localizer_vertical_radius_;
+  localization_params.horizontal_step = node.localizer_horizontal_step_;
+  localization_params.vertical_step = node.localizer_vertical_step_;
+  localization_params.angular_step_rads = node.localizer_angular_step_;
+  localization_params.enable_reading_internals = node.enable_slam_visualization_;
 
   // NOTE: Even if LocalizeInMap fails, we still expect it to call the callback.
   // We rely on the callback to set the value of the response_promise.
-  cuvslam_slam->LocalizeInMap(map_folder_path, pose_hint, empty_images, localization_settings,
+  compat::LocalizeInMap(
+    *cuvslam_slam, map_folder_path, last_track_ts, pose_hint, empty_images, localization_params,
     [this](const cuvslam::Result<cuvslam::Pose> & result) {
       LocalizeInExistDbContext::Response response{boost::outcome_v2::failure(std::string(
               result.error_message))};
@@ -1651,6 +1659,9 @@ void VisualSlamNode::VisualSlamImpl::WriteRunOutput()
   info.Add("tool", "pq_cuvslam")
   .Add("wrapper_commit", PQ_CUVSLAM_GIT_COMMIT)
   .Add("cuvslam_version", cuvslam_version)
+  .Add("cuvslam_compiled", std::to_string(PQ_CUVSLAM_VERSION_MAJOR) + "." +
+    std::to_string(PQ_CUVSLAM_VERSION_MINOR) + "." + std::to_string(PQ_CUVSLAM_VERSION_PATCH))
+  .Add("cuvslam_cunls", compat::CompiledFeatures().cunls)
   .Add("input", run_input.empty() ? std::string("live topics") : run_input)
   .Add("processing_mode",
     node.processing_mode_ == ProcessingMode::OFFLINE ? "offline" : "realtime")

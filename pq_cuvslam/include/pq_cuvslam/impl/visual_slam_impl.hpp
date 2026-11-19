@@ -38,6 +38,7 @@
 #include "cuvslam/ground_constraint2.h"
 #include "cv_bridge/cv_bridge.hpp"
 #include "pq_cuvslam/third_party/isaac_common/messaging/message_stream_synchronizer.hpp"
+#include "pq_cuvslam/impl/cuvslam_compat.hpp"
 #include "pq_cuvslam/impl/device_frame_synchronizer.hpp"
 #include "pq_cuvslam/impl/landmarks_vis_helper.hpp"
 #include "pq_cuvslam/impl/latency_emulator.hpp"
@@ -224,12 +225,14 @@ struct VisualSlamNode::VisualSlamImpl
   PoseGraphVisHelper pose_graph_helper;
   // Localizer visualization
   LocalizerVisHelper localizer_helper;
+#if PQ_CUVSLAM_HAS_LOCALIZER_LAYERS
   // Localizer: map landmarks
   LandmarksVisHelper localizer_landmarks_vis_helper;
   // Localizer: tracked landmarks
   LandmarksVisHelper localizer_observations_vis_helper;
   // Localizer: loop closure landmarks
   LandmarksVisHelper localizer_lc_landmarks_vis_helper;
+#endif
 
   // Pose cache. For velocity calculation.
   PoseCache pose_cache;

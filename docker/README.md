@@ -18,13 +18,20 @@ Build arguments:
 | Argument | Default | Notes |
 |---|---|---|
 | `BASE_IMAGE` | `nvidia/cuda:13.1.1-devel-ubuntu24.04` | CUDA devel image on Ubuntu 24.04. Jetson: JetPack 7.2 based image, to be defined. |
-| `USE_CUNLS` | `OFF` | cuNLS solver; requires cuVSLAM >= 17. OFF as in the Isaac ROS node. |
+| `CUVSLAM_REF` | (empty) | cuVSLAM version to build: git tag or commit (`v15.0.0`, `v16.0.0`, `v17.0.1`, ...); empty: the `cuvslam` submodule (15.0.0). Supported: 15 to 17. |
+| `USE_CUNLS` | `AUTO` | cuNLS solver: `AUTO` = on from cuVSLAM 17 (needed by Multisensor), off before (not supported there, and off in the Isaac ROS node). |
 | `USE_CUDA_BUFFER` | `AUTO` | Zero-copy images through Isaac ROS `cuda_buffer`, enabled if the package is installed. Not installed by this image, so images go to cuVSLAM in host memory. |
 | `BUILD_TYPE` | `Release` | CMake build type. |
 
 Outside Docker, build with `colcon build --packages-ignore cuVSLAM`: the
 `cuvslam` submodule is a plain CMake project that colcon would otherwise build
 a second time as a separate package (pq_cuvslam already builds it).
+
+Example, cuVSLAM 17: `docker build -f docker/Dockerfile --build-arg CUVSLAM_REF=v17.0.1 -t pq_cuvslam:cuvslam17 .`
+Outside Docker: `colcon build --packages-ignore cuVSLAM --cmake-args -DCUVSLAM_REF=v17.0.1`
+(or `-DCUVSLAM_SOURCE_DIR=<checkout>`). The node logs the cuVSLAM version and its features at
+`configure`, refuses a library that differs from the one of the build, and writes both to
+`run_info.json`.
 
 GPU architecture: cuVSLAM 15 compiles its CUDA kernels for all architectures
 supported by the toolkit (`-arch=all`), so the image runs on any supported

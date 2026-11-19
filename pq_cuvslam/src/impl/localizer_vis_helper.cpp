@@ -19,6 +19,7 @@
 #include <string>
 #include <vector>
 
+#include "pq_cuvslam/impl/cuvslam_compat.hpp"
 #include "pq_cuvslam/impl/cuvslam_ros_conversion.hpp"
 #include "pq_cuvslam/impl/has_subscribers.hpp"
 #include "pq_cuvslam/impl/localizer_vis_helper.hpp"
@@ -53,14 +54,18 @@ void LocalizerVisHelper::Init(
   publisher_localizer_probes_ = publisher_localizer_probes;
 
   VisHelper::Init(cuvslam_slam, canonical_pose_cuvslam, frame_id, logger);
+#if PQ_CUVSLAM_HAS_LOCALIZER_LAYERS
   thread_ = std::thread{&LocalizerVisHelper::Run, this};
+#endif  // the localizer data layers were removed in cuVSLAM 16
 }
 
 void LocalizerVisHelper::Reset()
 {
+#if PQ_CUVSLAM_HAS_LOCALIZER_LAYERS
   if (cuvslam_slam_) {
     cuvslam_slam_->DisableReadingData(cuvslam::Slam::DataLayer::LocalizerProbes);
   }
+#endif
   publisher_localizer_probes_.reset();
   localization_finished_ = false;
   have_result_pose_ = false;
@@ -80,6 +85,7 @@ void LocalizerVisHelper::SetResult(bool succeeded, const tf2::Transform & pose)
 
 void LocalizerVisHelper::Run()
 {
+#if PQ_CUVSLAM_HAS_LOCALIZER_LAYERS
   std::unique_lock<std::mutex> locker(mutex_);
   // cuvslam_slam_ will be null after Exit() was called
   while (cuvslam_slam_) {
@@ -261,6 +267,7 @@ void LocalizerVisHelper::Run()
       RCLCPP_WARN(logger_, "LocalizerVisHelper has failed to run: %s", e.what());
     }
   }
+#endif  // PQ_CUVSLAM_HAS_LOCALIZER_LAYERS
 }
 
 }  // namespace visual_slam

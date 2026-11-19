@@ -153,7 +153,9 @@ struct ProfileCheck
   std::vector<std::string> errors;
   std::vector<std::string> warnings;
 };
-ProfileCheck CheckProfile(const Profile & profile, int cuvslam_major);
+// cuvslam_major and multisensor_available describe the cuVSLAM build (impl/cuvslam_compat).
+ProfileCheck CheckProfile(
+  const Profile & profile, int cuvslam_major, bool multisensor_available);
 
 const char * ProfileModeName(ProfileMode mode);
 

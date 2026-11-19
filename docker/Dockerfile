@@ -16,10 +16,12 @@ ARG BASE_IMAGE=nvidia/cuda:13.1.1-devel-ubuntu24.04
 FROM ${BASE_IMAGE}
 
 # Build options forwarded to the pq_cuvslam CMake configuration.
-#   USE_CUNLS:       cuNLS solver in cuVSLAM (only from cuVSLAM 17; OFF as in Isaac ROS)
+#   CUVSLAM_REF:     cuVSLAM git tag or commit to build (e.g. v17.0.1); empty: the submodule
+#   USE_CUNLS:       cuNLS solver in cuVSLAM (AUTO: on from cuVSLAM 17, off before)
 #   USE_CUDA_BUFFER: zero-copy images through Isaac ROS cuda_buffer (AUTO/ON/OFF)
 #   BUILD_TYPE:      CMake build type
-ARG USE_CUNLS=OFF
+ARG CUVSLAM_REF=
+ARG USE_CUNLS=AUTO
 ARG USE_CUDA_BUFFER=AUTO
 ARG BUILD_TYPE=Release
 # Version of the ros2-apt-source package that configures the ROS 2 apt repository.
@@ -97,6 +99,7 @@ RUN source /opt/ros/${ROS_DISTRO}/setup.bash \
         --event-handlers console_direct+ \
         --cmake-args \
             -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+            -DCUVSLAM_REF=${CUVSLAM_REF} \
             -DUSE_CUNLS=${USE_CUNLS} \
             -DUSE_CUDA_BUFFER=${USE_CUDA_BUFFER}
 

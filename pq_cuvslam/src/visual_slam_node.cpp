@@ -24,6 +24,7 @@
 #include <vector>
 #include <thread>
 
+#include "pq_cuvslam/impl/cuvslam_compat.hpp"
 #include "pq_cuvslam/impl/qos.hpp"
 #include "pq_cuvslam/visual_slam_node.hpp"
 #include "pq_cuvslam/impl/types.hpp"
@@ -209,17 +210,19 @@ void VisualSlamNode::DeclareAndReadParameters()
 
 void VisualSlamNode::CheckSetup()
 {
-  // cuVSLAM API version
+  // cuVSLAM version: the library loaded at run time must be the one of the build (the
+  // differences between versions are handled by impl/cuvslam_compat).
   int32_t cuvslam_major, cuvslam_minor, cuvslam_patch;
   const auto cuvslam_version = cuvslam::GetVersion(&cuvslam_major, &cuvslam_minor, &cuvslam_patch);
-  RCLCPP_INFO(get_logger(), "cuVSLAM version: %s", std::string(cuvslam_version).c_str());
-
-  // VisualSlamNode is designed for this cuvslam sdk version:
-  const int32_t exp_cuvslam_major = 15, exp_cuvslam_minor = 0;
-  if (cuvslam_major != exp_cuvslam_major || cuvslam_minor != exp_cuvslam_minor) {
-    throw std::runtime_error(
-            "VisualSlamNode is designed to work with cuVSLAM SDK v" +
-            std::to_string(exp_cuvslam_major) + "." + std::to_string(exp_cuvslam_minor));
+  const compat::Features features = compat::CompiledFeatures();
+  RCLCPP_INFO(
+    get_logger(), "cuVSLAM version: %s (features: mono %s, multisensor %s, cuNLS %s, "
+    "SetSlamPose %s, localizer visualization %s)", std::string(cuvslam_version).c_str(),
+    features.mono ? "yes" : "no", features.multisensor ? "yes" : "no",
+    features.cunls ? "yes" : "no", features.set_slam_pose ? "yes" : "no",
+    features.localizer_layers ? "yes" : "no");
+  if (const std::string error = compat::CheckRuntimeVersion(); !error.empty()) {
+    throw std::runtime_error(error);
   }
 
   if (tracking_mode_ < static_cast<int>(TrackingMode::MULTICAMERA) ||
@@ -528,9 +531,8 @@ void VisualSlamNode::ApplyProfile()
   const std::string path = ResolveProfilePath(profile_name_, share);
   Profile profile = LoadProfile(path);
 
-  int32_t major = 0, minor = 0, patch = 0;
-  cuvslam::GetVersion(&major, &minor, &patch);
-  const ProfileCheck check = CheckProfile(profile, major);
+  const compat::Features features = compat::CompiledFeatures();
+  const ProfileCheck check = CheckProfile(profile, features.major, features.multisensor);
   for (const auto & warning : check.warnings) {
     RCLCPP_WARN(get_logger(), "Profile %s: %s", profile.name.c_str(), warning.c_str());
   }
@@ -793,7 +795,7 @@ void VisualSlamNode::CallbackSetSlamPose(
     cuvslam::Pose req_map_pose_cuvslam = TocuVSLAMPose(req_map_pose_base_link);
 
     try {
-      impl_->cuvslam_slam->SetSlamPose(req_map_pose_cuvslam);
+      compat::SetSlamPose(*impl_->cuvslam_slam, req_map_pose_cuvslam);
       res->success = true;
     } catch (const std::exception & e) {
       RCLCPP_WARN(this->get_logger(), "SetSlamPose Error: %s", e.what());
