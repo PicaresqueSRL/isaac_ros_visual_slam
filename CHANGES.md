@@ -153,6 +153,15 @@ This file records every change made to it. Update it with each change.
   `cam1_cam2_ir` on `loop_closure`: deterministic, rigid RMSE to ground truth 1.20 m (Isaac
   ROS reference 1.18 m); `cam2_rgbd` on `building_in_108`: 0 frames lost, RMSE 0.80 m.
 
+### 2026-11-19
+
+**Bag analysis tools** (`ab256be`)
+- `tools/analyze_sync.py`: timing of the two cameras (gaps, stale stamps, capture phase and its
+  drift, clock offset from the gyroscopes).
+- `tools/check_rotation_compensation.py`: validation of the gyroscope rotation compensation
+  on consecutive frames, and gyroscope - image time offset scan.
+- `tools/analyze_images.py`: saturation, dark pixels and projector dot density per IR stream.
+
 ## Notes
 
 - Frames processed: only complete stereo pairs reach the tracker (e.g. `loop_closure`: 826
