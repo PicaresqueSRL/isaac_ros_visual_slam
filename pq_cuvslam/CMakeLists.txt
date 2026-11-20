@@ -235,18 +235,17 @@ if(VSLAM_WITH_CUDA_BUFFER)
   target_compile_definitions(visual_slam_node PRIVATE VSLAM_WITH_CUDA_BUFFER)
 endif()
 
-# Commit of the wrapper, written to run_info.json. Read at configure time.
-execute_process(
-  COMMAND git -C "${CMAKE_CURRENT_SOURCE_DIR}" describe --always --dirty --abbrev=12
-  OUTPUT_VARIABLE PQ_CUVSLAM_GIT_COMMIT
-  OUTPUT_STRIP_TRAILING_WHITESPACE
-  ERROR_QUIET)
-if(NOT PQ_CUVSLAM_GIT_COMMIT)
-  set(PQ_CUVSLAM_GIT_COMMIT "unknown")
-endif()
-message(STATUS "pq_cuvslam commit: ${PQ_CUVSLAM_GIT_COMMIT}")
-target_compile_definitions(visual_slam_node PRIVATE
-  PQ_CUVSLAM_GIT_COMMIT="${PQ_CUVSLAM_GIT_COMMIT}")
+# Commit of the wrapper (git describe), written to run_info.json. Read at every build into a
+# generated header (cmake/git_version.cmake).
+set(PQ_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+add_custom_target(pq_cuvslam_git_version ALL
+  COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+    -DOUTPUT=${PQ_GENERATED_DIR}/pq_cuvslam/git_version.hpp
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/git_version.cmake
+  BYPRODUCTS ${PQ_GENERATED_DIR}/pq_cuvslam/git_version.hpp
+  COMMENT "Reading the pq_cuvslam commit")
+add_dependencies(visual_slam_node pq_cuvslam_git_version)
+target_include_directories(visual_slam_node PRIVATE ${PQ_GENERATED_DIR})
 # cuVSLAM version and features of the build, for the adaptation layer (impl/cuvslam_compat).
 target_compile_definitions(visual_slam_node PUBLIC
   PQ_CUVSLAM_VERSION_MAJOR=${CUVSLAM_VERSION_MAJOR}

@@ -30,9 +30,7 @@
 
 #include "Eigen/Dense"
 
-#ifndef PQ_CUVSLAM_GIT_COMMIT
-#define PQ_CUVSLAM_GIT_COMMIT "unknown"
-#endif
+#include "pq_cuvslam/git_version.hpp"  // generated: PQ_CUVSLAM_GIT_COMMIT
 #if defined(VSLAM_WITH_CUDA_BUFFER)
   #include "cuda_buffer/cuda_buffer_api.hpp"
 #endif

@@ -39,6 +39,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <iostream>
 #include <map>
@@ -70,6 +71,7 @@ struct Options
   std::string bag;
   double rate = 0.0;        // 0 = as fast as possible (deterministic)
   int64_t max_frames = -1;  // messages of the first image topic to replay; -1 = all
+  bool cuda_blocking = true;  // CUDA_LAUNCH_BLOCKING=1 with processing_mode offline
 };
 
 void PrintUsage()
@@ -79,7 +81,8 @@ void PrintUsage()
     "[--ros-args <node parameters and remappings>]\n"
     "  --rate R        0 (default): deterministic, as fast as possible, nothing dropped\n"
     "                  R > 0: simulated online at R times the recorded speed\n"
-    "  --max-frames N  stop after N frames of the first image topic\n";
+    "  --max-frames N  stop after N frames of the first image topic\n"
+    "  --no-cuda-blocking  do not set CUDA_LAUNCH_BLOCKING=1 in offline mode\n";
 }
 
 bool ParseOptions(const std::vector<std::string> & args, Options & options)
@@ -91,6 +94,8 @@ bool ParseOptions(const std::vector<std::string> & args, Options & options)
       options.rate = std::stod(args[++i]);
     } else if (args[i] == "--max-frames" && i + 1 < args.size()) {
       options.max_frames = std::stoll(args[++i]);
+    } else if (args[i] == "--no-cuda-blocking") {
+      options.cuda_blocking = false;
     } else if (args[i] == "-h" || args[i] == "--help") {
       return false;
     } else {
@@ -355,7 +360,7 @@ void ReplayOnline(
   reader_thread.join();
 }
 
-std::string StatsJson(const Options & options, const ReplayStats & stats)
+std::string StatsJson(const Options & options, const ReplayStats & stats, bool cuda_blocking)
 {
   const auto counts = [](const std::map<std::string, uint64_t> & m) {
       std::ostringstream ss;
@@ -372,6 +377,7 @@ std::string StatsJson(const Options & options, const ReplayStats & stats)
   ss << "{\"mode\": \"" << (options.rate > 0.0 ? "simulated_online" : "deterministic") << "\", " <<
     "\"rate\": " << options.rate << ", " <<
     "\"max_frames\": " << options.max_frames << ", " <<
+    "\"cuda_launch_blocking\": " << (cuda_blocking ? "true" : "false") << ", " <<
     "\"frames_read\": " << stats.frames << ", " <<
     "\"wall_time_s\": " << stats.wall_s << ", " <<
     "\"messages_received\": " << counts(stats.received) << ", " <<
@@ -399,6 +405,22 @@ int main(int argc, char ** argv)
     node_options.append_parameter_override("autostart", false);
     auto node = std::make_shared<VisualSlamNode>(node_options);
     const rclcpp::Logger logger = node->get_logger().get_child("replay");
+
+    // Offline (reproducible) replay: CUDA kernel launches made synchronous. cuVSLAM gives
+    // different results from run to run in some multicamera runs because of asynchronous GPU
+    // work; with CUDA_LAUNCH_BLOCKING=1 the results are identical (Track() about 50 % slower).
+    // Must be set before the CUDA context is created (at configure).
+    bool cuda_blocking = false;
+    if (node->get_parameter("processing_mode").as_string() == "offline" && options.cuda_blocking) {
+      const char * current = std::getenv("CUDA_LAUNCH_BLOCKING");
+      if (current == nullptr) {
+        setenv("CUDA_LAUNCH_BLOCKING", "1", 0);
+        cuda_blocking = true;
+      } else {
+        cuda_blocking = std::strcmp(current, "1") == 0;
+      }
+    }
+    RCLCPP_INFO(logger, "CUDA_LAUNCH_BLOCKING: %s", cuda_blocking ? "1" : "not set");
 
     if (node->configure().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE ||
       node->activate().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE)
@@ -466,7 +488,7 @@ int main(int argc, char ** argv)
       exit_code = EXIT_FAILURE;
     }
 
-    node->AddRunInfo("replay", StatsJson(options, stats));
+    node->AddRunInfo("replay", StatsJson(options, stats, cuda_blocking));
     // Writes the run output and destroys the tracker.
     node->deactivate();
     node->cleanup();
