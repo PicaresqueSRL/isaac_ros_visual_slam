@@ -200,6 +200,26 @@ This file records every change made to it. Update it with each change.
   0.66 -> 0.47 deg, `building_in_108` 0.80 -> 0.61 deg, frames above 2 deg 17 -> 1 and 12 -> 1);
   multicamera and RGBD about equal across versions.
 
+### 2026-11-20
+
+**Regression benchmark and MCAP recordings** (`a058b64`)
+- `tools/benchmark.py` (`run`, `compare`) and `tools/benchmark_docker.sh`: deterministic replay
+  of bags x profiles, ground-truth-free metrics (frames lost, rotation error against the
+  gyroscope, Track() time, determinism), optional ground truth, comparison between builds.
+- `tools/record_slam.sh`: SLAM output of a bag recorded to MCAP (plus Rerun MCAP and CSV).
+- Recording and benchmark containers use `--network none` (the ROS discovery reached other
+  containers and mixed their messages into the recordings).
+- Offline replay sets `CUDA_LAUNCH_BLOCKING=1`: some multicamera runs differed from run to run
+  because of asynchronous GPU work in cuVSLAM. RGBD (and Mono) stay non-deterministic: cuVSLAM
+  seeds its RANSAC from `std::random_device` (`math/ransac.h`, used by `sof_mono` and the loop
+  closure solver); compare them over repeated runs.
+- Wrapper commit read at every build (`cmake/git_version.cmake`).
+- Benchmark 15.0.0 vs 17.0.1 (6 bags, 3 profiles, two runs): stereo IR + IMU with 17 has a lower
+  rotation error on the harder bags (`loop_closure` -29 %, `building_in_108` -24 %,
+  `staircase_fix_1` -37 %, frames above 2 deg 17 -> 1 and 12 -> 1) and +9-10 % (< 0.01 deg) on
+  the clean ones; multicamera 0 to +10 %; RGBD dominated by its run-to-run variation; the
+  saturated `cars_106` fails the same way with both.
+
 ## Notes
 
 - Frames processed: only complete stereo pairs reach the tracker (e.g. `loop_closure`: 826
