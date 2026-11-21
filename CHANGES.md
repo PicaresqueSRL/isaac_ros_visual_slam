@@ -236,6 +236,13 @@ This file records every change made to it. Update it with each change.
 - Trajectories unchanged. On a fully saturated bag cuVSLAM reports tracked frames with no
   landmarks: the stream saturation is the signal to watch.
 
+**Jetson build** (`4cecb26`)
+- Image built on the Orin Nano (JetPack 7.2.1, CUDA 13.2) with cuVSLAM 17.0.1 and cuNLS: base
+  `nvidia/cuda:13.2.0-devel-ubuntu24.04` (arm64), `BUILD_JOBS=2` (8 GB, no swap; free memory
+  down to 2.7 GB), `CUDA_COMPAT=remove` (the cuda-compat hook of the NVIDIA Container Toolkit
+  1.19.1 crashes on the compat libraries of the image). Build arguments moved after the system
+  and ROS layers. The node configures with the GPU and activates.
+
 ## Notes
 
 - Frames processed: only complete stereo pairs reach the tracker (e.g. `loop_closure`: 826
