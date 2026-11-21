@@ -24,6 +24,7 @@ This file records every change made to it. Update it with each change.
 | Bag input | `ros2 bag play` at real-time speed | also `pq_cuvslam_replay`: deterministic (every frame) or simulated online (`--rate`) |
 | Latency emulation | none | `latency_profile` / `emulated_latency_ms`: frames take as long as on the target platform |
 | Diagnostics | `visual_slam/status`, `/diagnostics` | also `visual_slam/diagnostics/frame` (per-frame times, observations, stream saturation, valid depth) and `visual_slam/events` (`pq_cuvslam_interfaces`) |
+| IMU queue | SENSOR_DATA depth (5) | 400 messages (`imu_qos_depth`): no IMU samples lost in real time |
 | Run output | topics only | also CSV + `run_info.json` (`run_output_dir`), format of `run_output.py` |
 | Build | Isaac ROS container | `docker/Dockerfile` (ROS 2 Lyrical, Ubuntu 24.04, CUDA 13) |
 | Configuration | launch parameters + remappings + `static_transform_publisher` | YAML profiles (`profile`): cameras, topics, frames, IMU, depth, extrinsics with source, mode |
@@ -257,6 +258,23 @@ This file records every change made to it. Update it with each change.
   in the visual positions and in the integrated accelerometer); `tools/scale_recording.py`
   scales a recording for Rerun. Offline tools: the method is validated before moving it into
   the node.
+
+**Real-time IMU queue** (`49a900b`)
+- Default `imu_qos_depth` 400 instead of the SENSOR_DATA depth 5. In real time on the Orin Nano
+  the short queue lost 20-300 IMU samples per bag and the VIO diverged without reporting it
+  (staircase_fix_1: 7-19 deg rotation error RMS); with 400 no sample is lost (0.19 deg) and the
+  real-time results match the offline ones.
+
+**Rerun files with images; real-time recordings** (`076aca1`)
+- `tools/to_rerun.py`: Rerun MCAP with the RGB images of the bag on the sensor time;
+  `tools/record_slam.sh` uses it and replays in real time by default (`MODE=offline`).
+
+**Virtual cameras** (`29a10f3`)
+- Per profile camera `undistort`, `pad_top`, `pad_bottom`: undistorted pinhole image with empty
+  bands, excluded from the feature search. Makes cuVSLAM accept the RGB pair in Multisensor
+  (frustum overlap check > 50 %, same resolution, pinhole for cuNLS). The check of cuVSLAM 17
+  uses the inverse relative pose between the cameras (the bands are on the far sides). With
+  the 15-22 % real overlap of our holder the Multisensor odometry is not reliable.
 
 ## Notes
 
