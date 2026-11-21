@@ -252,6 +252,12 @@ This file records every change made to it. Update it with each change.
   views overlap by more than 50 % at 2-4 m (hard-coded), so `cam1_cam2_rgb_imu` is rejected
   with our holder (cam1 49.3 deg lower than cam2).
 
+**Mono scale** (`d396a32`)
+- `tools/mono_scale.py`: scale of a Mono run from the IMU (vertical step oscillation, 1-3 Hz,
+  in the visual positions and in the integrated accelerometer); `tools/scale_recording.py`
+  scales a recording for Rerun. Offline tools: the method is validated before moving it into
+  the node.
+
 ## Notes
 
 - Frames processed: only complete stereo pairs reach the tracker (e.g. `loop_closure`: 826
