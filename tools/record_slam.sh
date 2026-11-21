@@ -18,26 +18,31 @@
 # Replays one bag with pq_cuvslam and records the SLAM output to MCAP.
 # Runs in the pq_cuvslam container (ROS 2 and the workspace sourced).
 #
-# Usage: record_slam.sh <bag> <out dir> <profile> [rate] [to_rerun_mcap.py]
+# Usage: record_slam.sh <bag> <out dir> <profile> [rate] [image topics]
 #
-# The replay uses processing_mode offline (every frame processed, reproducible) at <rate>
-# times the recorded speed (default 2), with the visualization topics on. Output in <out dir>:
+# Default: real-time replay (rate 1, processing_mode realtime: frames dropped when the tracker
+# is late, bundle adjustment and SLAM in background threads), i.e. what the node gives online.
+# MODE=offline: every frame processed, reproducible, at <rate> times the recorded speed.
+# The visualization topics are on. Output in <out dir>:
 #   bag/        MCAP with odometry, paths, status, TF and the visualization topics
-#   rerun/      the same converted for Rerun (if to_rerun_mcap.py is given)
+#   rerun/      the same for Rerun (to_rerun.py), with the camera images of the bag (default
+#               the two RGB streams; comma-separated topics, "none" for no images)
 #   run/        CSV files and run_info.json
 #   *.log       replay, record and conversion logs
 
 set -u
 
 if [ $# -lt 3 ]; then
-  echo "Usage: $0 <bag> <out dir> <profile> [rate] [to_rerun_mcap.py]" >&2
+  echo "Usage: $0 <bag> <out dir> <profile> [rate] [image topics]" >&2
   exit 2
 fi
 BAG=$1
 OUT=$2
 PROFILE=$3
-RATE=${4:-2.0}
-RERUN_SCRIPT=${5:-}
+MODE=${MODE:-realtime}
+if [ "$MODE" = offline ]; then RATE=${4:-2.0}; else RATE=${4:-1.0}; fi
+IMAGES=${5:-/cam2/color/image_raw,/cam1/color/image_raw}
+[ "$IMAGES" = none ] && IMAGES=
 
 # Discovery limited to this host (container): other ROS processes on the network (e.g. another
 # replay in a parallel container) must not end up in the recording.
@@ -67,7 +72,7 @@ if ! kill -0 "$RECORD_PID" 2>/dev/null; then
 fi
 
 ros2 launch pq_cuvslam slam.launch.py profile:="$PROFILE" bag:="$BAG" rate:="$RATE" \
-  processing_mode:=offline enable_vis:=true run_output_dir:="$OUT/run" \
+  processing_mode:="$MODE" enable_vis:=true run_output_dir:="$OUT/run" \
   > "$OUT/replay.log" 2>&1 < /dev/null
 RC=$?
 
@@ -90,9 +95,8 @@ if [ ! -f "$OUT/bag/metadata.yaml" ]; then
   echo "[$NAME] ERROR: recording not closed, see $OUT/record.log" >&2
   exit 1
 fi
-if [ -n "$RERUN_SCRIPT" ]; then
-  if ! python3 "$RERUN_SCRIPT" "$OUT/bag" "$OUT/rerun" > "$OUT/rerun.log" 2>&1; then
-    echo "[$NAME] WARNING: Rerun conversion failed, see $OUT/rerun.log" >&2
-  fi
+if ! python3 "$(dirname "$0")/to_rerun.py" "$OUT/bag" "$BAG" "$OUT/rerun" --images "$IMAGES" \
+  --max-image-rate 0 > "$OUT/rerun.log" 2>&1; then
+  echo "[$NAME] WARNING: Rerun conversion failed, see $OUT/rerun.log" >&2
 fi
 echo "[$NAME] done -> $OUT"

@@ -14,7 +14,8 @@ container.
 | `check_rotation_compensation.py` | Check of the gyroscope rotation compensation on consecutive frames; gyroscope - image time offset |
 | `mono_scale.py` | Metric scale of a Mono run from the IMU: vertical oscillations of the walk (band 1-3 Hz) in the visual positions and in the double-integrated accelerometer, on sliding windows; evaluation against a metric reference run; scaled `odometry.csv` |
 | `scale_recording.py` | Applies a constant scale to a SLAM recording (MCAP): odometry, paths, landmarks, map/odom TF |
-| `record_slam.sh` | Replays a bag (offline, all frames) and records the SLAM output to MCAP, plus the Rerun MCAP and the CSV files |
+| `to_rerun.py` | MCAP for Rerun from a SLAM recording, with the camera images of the source bag (JPEG) on the sensor time; optional scale |
+| `record_slam.sh` | Replays a bag (real time by default, `MODE=offline` for all frames) and records the SLAM output to MCAP, plus the Rerun MCAP with the RGB images and the CSV files |
 | `run_bag.sh` | Plays a bag at real-time speed with `ros2 bag play` and records the output topics (live-like run) |
 
 ## Benchmark
@@ -58,11 +59,11 @@ in a later summary; its exit code is 1 when there are regressions.
 ```bash
 docker run --rm --gpus all --network none -v ~/bags:/bags:ro -v ~/slam_runs:/out \
   -v $PWD/tools:/tools:ro pq_cuvslam:dev \
-  /tools/record_slam.sh /bags/<category>/<bag> /out/<profile>/<bag> <profile> 2.0 [to_rerun_mcap.py]
+  /tools/record_slam.sh /bags/<category>/<bag> /out/<profile>/<bag> <profile>
 ```
 
-Output: `bag/` (MCAP with odometry, paths, status, TF and visualization topics), `rerun/` (with
-`to_rerun_mcap.py`), `run/` (CSV and `run_info.json`). Run recording containers with
+Output: `bag/` (MCAP with odometry, paths, status, TF and visualization topics), `rerun/` (for
+Rerun, with the RGB images of the bag), `run/` (CSV and `run_info.json`). Run recording containers with
 `--network none`: with the default Docker network the ROS discovery reaches other containers,
 and their messages would end up in the recording.
 
