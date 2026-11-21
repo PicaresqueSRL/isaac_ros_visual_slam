@@ -23,6 +23,7 @@ This file records every change made to it. Update it with each change.
 | Multi-camera sync | images grouped by timestamp, rig frame at the latest stamp | per-device pairing (nearest frame) + gyroscope rotation compensation (`sync` in the profile) |
 | Bag input | `ros2 bag play` at real-time speed | also `pq_cuvslam_replay`: deterministic (every frame) or simulated online (`--rate`) |
 | Latency emulation | none | `latency_profile` / `emulated_latency_ms`: frames take as long as on the target platform |
+| Diagnostics | `visual_slam/status`, `/diagnostics` | also `visual_slam/diagnostics/frame` (per-frame times, observations, stream saturation, valid depth) and `visual_slam/events` (`pq_cuvslam_interfaces`) |
 | Run output | topics only | also CSV + `run_info.json` (`run_output_dir`), format of `run_output.py` |
 | Build | Isaac ROS container | `docker/Dockerfile` (ROS 2 Lyrical, Ubuntu 24.04, CUDA 13) |
 | Configuration | launch parameters + remappings + `static_transform_publisher` | YAML profiles (`profile`): cameras, topics, frames, IMU, depth, extrinsics with source, mode |
@@ -219,6 +220,21 @@ This file records every change made to it. Update it with each change.
   `staircase_fix_1` -37 %, frames above 2 deg 17 -> 1 and 12 -> 1) and +9-10 % (< 0.01 deg) on
   the clean ones; multicamera 0 to +10 %; RGBD dominated by its run-to-run variation; the
   saturated `cars_106` fails the same way with both.
+
+### 2026-11-21
+
+**Diagnostics and events** (`aa7c8b3`)
+- New package `pq_cuvslam_interfaces` (`StreamStats`, `FrameDiagnostics`, `SlamEvent`);
+  `isaac_ros_visual_slam_interfaces` unchanged.
+- `visual_slam/diagnostics/frame`: mode, profile, tracked, Track() / callback time, latency
+  (live), sync offset, observations per camera, landmarks, loop closure, and per input image
+  brightness, saturated and dark pixels, valid depth (`impl/image_stats`, subsampled with
+  `diagnostics_pixel_stride`). Published when it has subscribers (`enable_frame_diagnostics`).
+- `visual_slam/events`: configured, tracker initialized, tracking lost / recovered, loop closure.
+- Run output: `streams.csv`, `events.csv`, summary in `run_info.json`; benchmark column
+  `saturated_pct`. `pq_cuvslam/README.md` with the added parameters and topics.
+- Trajectories unchanged. On a fully saturated bag cuVSLAM reports tracked frames with no
+  landmarks: the stream saturation is the signal to watch.
 
 ## Notes
 
