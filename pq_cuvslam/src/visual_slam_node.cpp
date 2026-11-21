@@ -160,8 +160,12 @@ void VisualSlamNode::DeclareAndReadParameters()
   imu_buffer_size_ = Param<int>("imu_buffer_size", 50);
   image_qos_ = ParseQosString(
     Param<std::string>("image_qos", "SENSOR_DATA"), Param<int>("image_qos_depth", 0));
+  // IMU queue: 400 messages (2 s at 200 Hz). The SENSOR_DATA depth (5, 25 ms at 200 Hz) drops
+  // IMU samples whenever a frame takes longer, and in real time on the Orin Nano the VIO then
+  // diverges (staircase_fix_1: rotation error 7-19 deg RMS with 88-100 samples lost, 0.19 deg
+  // with none).
   imu_qos_ = ParseQosString(
-    Param<std::string>("imu_qos", "SENSOR_DATA"), Param<int>("imu_qos_depth", 0));
+    Param<std::string>("imu_qos", "SENSOR_DATA"), Param<int>("imu_qos_depth", 400));
   // Output Parameters:
   override_publishing_stamp_ = Param<bool>("override_publishing_stamp", false);
   publish_map_to_odom_tf_ = Param<bool>("publish_map_to_odom_tf", true);

@@ -33,6 +33,8 @@ Benchmark and analysis tools: `../tools/`.
 | `latency_profile`, `emulated_latency_ms` | `""`, `0` | emulated processing time per frame |
 | `enable_frame_diagnostics` | `true` | publish `visual_slam/diagnostics/frame` (when it has subscribers) |
 | `diagnostics_pixel_stride` | `4` | image statistics on one pixel every N in both directions |
+| `imu_qos_depth` | `400` (Isaac ROS: 0, i.e. the SENSOR_DATA depth 5) | IMU subscription queue; a short queue loses IMU samples when a frame is slow, and the real-time VIO diverges on the Orin Nano |
+| `multisensor_use_imu` | `true` | Multisensor mode: fuse the IMU |
 
 ## Topics
 
