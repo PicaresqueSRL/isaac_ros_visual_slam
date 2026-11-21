@@ -10,20 +10,12 @@
 
 # Base image with the CUDA toolkit (devel) on Ubuntu 24.04.
 #   PC (x86_64):  nvidia/cuda:13.1.1-devel-ubuntu24.04 (default)
-#   Jetson:       JetPack 7.2 based image (to be defined and validated on the Orin Nano)
+#   Jetson:       nvidia/cuda:13.2.0-devel-ubuntu24.04 (arm64, CUDA of JetPack 7.2), with
+#                 --build-arg CUDA_COMPAT=remove --build-arg BUILD_JOBS=2
 ARG BASE_IMAGE=nvidia/cuda:13.1.1-devel-ubuntu24.04
 
 FROM ${BASE_IMAGE}
 
-# Build options forwarded to the pq_cuvslam CMake configuration.
-#   CUVSLAM_REF:     cuVSLAM git tag or commit to build (e.g. v17.0.1); empty: the submodule
-#   USE_CUNLS:       cuNLS solver in cuVSLAM (AUTO: on from cuVSLAM 17, off before)
-#   USE_CUDA_BUFFER: zero-copy images through Isaac ROS cuda_buffer (AUTO/ON/OFF)
-#   BUILD_TYPE:      CMake build type
-ARG CUVSLAM_REF=
-ARG USE_CUNLS=AUTO
-ARG USE_CUDA_BUFFER=AUTO
-ARG BUILD_TYPE=Release
 # Version of the ros2-apt-source package that configures the ROS 2 apt repository.
 ARG ROS_APT_SOURCE_VERSION=1.2.0
 
@@ -92,10 +84,28 @@ COPY . src/isaac_ros_visual_slam
 RUN test -f src/isaac_ros_visual_slam/cuvslam/CMakeLists.txt \
     || { echo "cuvslam submodule missing: run 'git submodule update --init'" >&2; exit 1; }
 
+# Build options forwarded to the pq_cuvslam CMake configuration. Declared here, after the
+# system and ROS layers, so that changing them does not invalidate those cached layers.
+#   CUVSLAM_REF:     cuVSLAM git tag or commit to build (e.g. v17.0.1); empty: the submodule
+#   USE_CUNLS:       cuNLS solver in cuVSLAM (AUTO: on from cuVSLAM 17, off before)
+#   USE_CUDA_BUFFER: zero-copy images through Isaac ROS cuda_buffer (AUTO/ON/OFF)
+#   BUILD_TYPE:      CMake build type
+ARG CUVSLAM_REF=
+ARG USE_CUNLS=AUTO
+ARG USE_CUDA_BUFFER=AUTO
+ARG BUILD_TYPE=Release
+#   BUILD_JOBS:      parallel compile jobs (empty: all cores). On the Orin Nano (8 GB, no swap)
+#                    use 2-3: the CUDA kernels of cuVSLAM need a lot of memory per job.
+ARG BUILD_JOBS=
+
 # The cuvslam submodule is a plain CMake project: colcon would build it as a
 # separate package. It is built by pq_cuvslam (ExternalProject), so ignore it.
 RUN source /opt/ros/${ROS_DISTRO}/setup.bash \
+    && if [ -n "${BUILD_JOBS}" ]; then \
+           export MAKEFLAGS="-j${BUILD_JOBS}" CMAKE_BUILD_PARALLEL_LEVEL="${BUILD_JOBS}"; \
+       fi \
     && colcon build \
+        --parallel-workers 1 \
         --packages-ignore cuVSLAM \
         --event-handlers console_direct+ \
         --cmake-args \
@@ -103,6 +113,15 @@ RUN source /opt/ros/${ROS_DISTRO}/setup.bash \
             -DCUVSLAM_REF=${CUVSLAM_REF} \
             -DUSE_CUNLS=${USE_CUNLS} \
             -DUSE_CUDA_BUFFER=${USE_CUDA_BUFFER}
+
+# CUDA forward compatibility libraries of the base image (cuda-compat-*). Not needed when the
+# host driver supports the CUDA version of the image. On Jetson (JetPack 7.2, NVIDIA Container
+# Toolkit 1.19.1) they must be removed: the cuda-compat hook of the toolkit crashes reading them
+# ("slice bounds out of range") and no container starts. Jetson: --build-arg CUDA_COMPAT=remove.
+ARG CUDA_COMPAT=keep
+RUN if [ "${CUDA_COMPAT}" = remove ]; then \
+        dpkg -l 'cuda-compat*' 2>/dev/null | awk '/^ii/{print $2}' | xargs -r apt-get purge -y; \
+    fi
 
 RUN printf '%s\n' \
         "source /opt/ros/${ROS_DISTRO}/setup.bash" \

@@ -17,11 +17,13 @@ Build arguments:
 
 | Argument | Default | Notes |
 |---|---|---|
-| `BASE_IMAGE` | `nvidia/cuda:13.1.1-devel-ubuntu24.04` | CUDA devel image on Ubuntu 24.04. Jetson: JetPack 7.2 based image, to be defined. |
+| `BASE_IMAGE` | `nvidia/cuda:13.1.1-devel-ubuntu24.04` | CUDA devel image on Ubuntu 24.04. Jetson (JetPack 7.2): `nvidia/cuda:13.2.0-devel-ubuntu24.04` (arm64). |
 | `CUVSLAM_REF` | (empty) | cuVSLAM version to build: git tag or commit (`v15.0.0`, `v16.0.0`, `v17.0.1`, ...); empty: the `cuvslam` submodule (15.0.0). Supported: 15 to 17. |
 | `USE_CUNLS` | `AUTO` | cuNLS solver: `AUTO` = on from cuVSLAM 17 (needed by Multisensor), off before (not supported there, and off in the Isaac ROS node). |
 | `USE_CUDA_BUFFER` | `AUTO` | Zero-copy images through Isaac ROS `cuda_buffer`, enabled if the package is installed. Not installed by this image, so images go to cuVSLAM in host memory. |
 | `BUILD_TYPE` | `Release` | CMake build type. |
+| `BUILD_JOBS` | (empty: all cores) | Parallel compile jobs. Orin Nano (8 GB, no swap): `2` (peak about 4.5 GB in use while compiling the CUDA kernels). |
+| `CUDA_COMPAT` | `keep` | `remove`: purge the CUDA forward compatibility packages of the base image. Required on Jetson: with them the cuda-compat hook of the NVIDIA Container Toolkit 1.19.1 crashes and no container starts. |
 
 Outside Docker, build with `colcon build --packages-ignore cuVSLAM`: the
 `cuvslam` submodule is a plain CMake project that colcon would otherwise build
@@ -32,6 +34,19 @@ Outside Docker: `colcon build --packages-ignore cuVSLAM --cmake-args -DCUVSLAM_R
 (or `-DCUVSLAM_SOURCE_DIR=<checkout>`). The node logs the cuVSLAM version and its features at
 `configure`, refuses a library that differs from the one of the build, and writes both to
 `run_info.json`.
+
+### Jetson (JetPack 7.2, Orin Nano)
+
+```bash
+docker build -f docker/Dockerfile -t pq_cuvslam:v17 \
+  --build-arg BASE_IMAGE=nvidia/cuda:13.2.0-devel-ubuntu24.04 \
+  --build-arg CUVSLAM_REF=v17.0.1 --build-arg BUILD_JOBS=2 --build-arg CUDA_COMPAT=remove .
+```
+
+About 45 minutes on the Orin Nano (MAXN_SUPER) once the base layers are downloaded: cuVSLAM
+17 with cuNLS 31 minutes, the cuVSLAM sources fetch and the cuNLS configuration 4 minutes.
+Run with `--runtime nvidia` (the default runtime of JetPack). The build arguments are declared
+after the system and ROS layers, so changing the cuVSLAM version rebuilds only the workspace.
 
 GPU architecture: cuVSLAM 15 compiles its CUDA kernels for all architectures
 supported by the toolkit (`-arch=all`), so the image runs on any supported
