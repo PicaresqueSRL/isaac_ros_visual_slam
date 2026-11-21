@@ -1,23 +1,39 @@
 # cam2 + cam1 RGB cameras and cam2 IMU, cuVSLAM Multisensor mode (cuVSLAM >= 17 with cuNLS),
 # no infrared and no depth: for scenes where the IR stereo and the depth saturate.
-# Multisensor needs two cameras with overlapping views when there is no depth: cam2 looks
-# forward and cam1 49.3 deg down, the overlap is the lower part of the cam2 view.
 name: cam1_cam2_rgb_imu
 description: cam2 (forward) and cam1 (down) RGB cameras with the cam2 IMU, multisensor odometry
 mode: multisensor
 base_frame: cam2_link
 
+# The real overlap is 15-22 %, below the 50 % frustum overlap check of cuVSLAM. Both cameras are
+# given to cuVSLAM as virtual cameras with an empty band (principal point moved accordingly):
+# real pixels keep their viewing rays, only the declared views grow. The check of cuVSLAM 17
+# (frustum_intersection_graph.cpp) transforms the points of camera i with
+# camera_from_rig[i] * camera_from_rig[j]^-1, i.e. with the inverse of the relative pose: for
+# two cameras rotated about the x axis it sees them tilted the other way, so the bands are on
+# the far sides (cam2 top, cam1 bottom); with 200 px it sees 56-62 %. All cameras must also have
+# the same resolution. The bands are excluded from the feature search. Both RGB images are
+# undistorted to pinhole: the cuNLS solver of Multisensor supports pinhole cameras only.
+#
+# Result (cuVSLAM 17.0.1, real time): accepted, but with 15-22 % real overlap the Multisensor
+# odometry has few landmarks (median 9-65) and is not reliable: build_in_out 0.39 deg rotation
+# error and 10.6 m start-end distance against 18.9 m (stereo IR + IMU), outdoor_b_2000 and
+# cars_106 lose the tracking (4.6 and 7.0 deg). Kept for a holder with more overlap.
 cameras:
   - name: cam2_rgb
     device: cam2
     image_topic: /cam2/color/image_raw
     camera_info_topic: /cam2/color/camera_info
     optical_frame: cam2_color_optical_frame
+    undistort: true
+    pad_top: 200
   - name: cam1_rgb
     device: cam1
     image_topic: /cam1/color/image_raw
     camera_info_topic: /cam1/color/camera_info
     optical_frame: cam1_color_optical_frame
+    undistort: true
+    pad_bottom: 200
 
 imu:
   topic: /cam2/imu
@@ -61,7 +77,7 @@ hardware:
   ir_emitter: false
 
 parameters:
-  rectified_images: false        # the D455 RGB stream is distorted (plumb_bob)
+  rectified_images: false        # undistorted by the virtual cameras, R = identity
   enable_image_denoising: false
   image_jitter_threshold_ms: 150.0
   enable_localization_n_mapping: true

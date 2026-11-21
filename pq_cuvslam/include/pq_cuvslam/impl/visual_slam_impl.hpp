@@ -41,6 +41,7 @@
 #include "pq_cuvslam/impl/cuvslam_compat.hpp"
 #include "pq_cuvslam/impl/device_frame_synchronizer.hpp"
 #include "pq_cuvslam/impl/image_stats.hpp"
+#include "pq_cuvslam/impl/virtual_camera.hpp"
 #include "pq_cuvslam/impl/landmarks_vis_helper.hpp"
 #include "pq_cuvslam/impl/latency_emulator.hpp"
 #include "pq_cuvslam/impl/limited_vector.hpp"
@@ -202,6 +203,11 @@ struct VisualSlamNode::VisualSlamImpl
   bool last_frame_tracked = true;
   // cuVSLAM rejected the odometry configuration (invalid_argument): no further attempts.
   bool configuration_rejected = false;
+
+  // Virtual cameras (undistorted, extended), by camera index; built at initialization from the
+  // camera_info and the profile. Images are converted before the rotation compensation.
+  std::map<int, VirtualCamera> virtual_cameras;
+  ImageType ToVirtual(int camera, const ImageType & image);
   bool last_loop_closure = false;
 
   // Sequencer used to sequence imu and image messages.

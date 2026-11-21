@@ -58,6 +58,12 @@ depth:                                # required for rgbd; multisensor: depth or
   scale: 1000.0                       # raw depth units per meter (D455: millimeters)
   stereo_tracking: false
 
+# Per camera, optional: virtual camera given to cuVSLAM (impl/virtual_camera.hpp).
+#   undistort: true                     undistorted to pinhole (cuNLS / Multisensor: pinhole only)
+#   pad_top: 200                        empty band on top (principal point moved down) or at the
+#   pad_bottom: 200                     bottom: a wider declared view for the 50 % frustum
+#                                       overlap check (all cameras must have the same size)
+
 extrinsics:                           # transforms missing from the TF of the data
   - parent: cam2_link
     child: cam1_link

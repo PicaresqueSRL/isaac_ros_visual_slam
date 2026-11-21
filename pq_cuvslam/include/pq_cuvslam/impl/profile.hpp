@@ -58,6 +58,11 @@ struct ProfileCamera
   std::string image_topic;
   std::string camera_info_topic;
   std::string optical_frame;
+  // Virtual camera given to cuVSLAM (impl/virtual_camera.hpp): undistorted to pinhole, and
+  // extended by pad_top / pad_bottom pixels (needs undistort for a distorted camera).
+  bool undistort = false;
+  int pad_top = 0;
+  int pad_bottom = 0;
 };
 
 struct ProfileImu

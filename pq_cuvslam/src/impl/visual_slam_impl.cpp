@@ -366,6 +366,32 @@ void VisualSlamNode::VisualSlamImpl::Initialize()
     }
   }
 
+  // Virtual cameras of the profile: their intrinsics replace the camera_info ones.
+  virtual_cameras.clear();
+  if (node.profile_) {
+    for (size_t i = 0; i < node.profile_->cameras.size() && i < node.num_cameras_; ++i) {
+      const auto & pc = node.profile_->cameras[i];
+      if (!pc.undistort && pc.pad_top == 0 && pc.pad_bottom == 0) {
+        continue;
+      }
+      const auto & info = *initial_camera_info_messages.at(static_cast<int>(i)).value();
+      try {
+        VirtualCamera v = MakeVirtualCamera(info, pc.undistort, pc.pad_top, pc.pad_bottom);
+        initial_camera_info_messages[static_cast<int>(i)] = v.info;
+        RCLCPP_INFO(
+          node.get_logger(),
+          "Camera %s: virtual camera %ux%u (undistort %s, bands %d px top, %d px bottom)",
+          pc.name.c_str(), v.width, v.height, pc.undistort ? "yes" : "no", v.pad_top,
+          v.pad_bottom);
+        virtual_cameras.emplace(static_cast<int>(i), std::move(v));
+      } catch (const std::invalid_argument & e) {
+        RCLCPP_ERROR(node.get_logger(), "Camera %s: %s", pc.name.c_str(), e.what());
+        configuration_rejected = true;
+        return;
+      }
+    }
+  }
+
   // Setup camera extrinsics (and intrinsics).
   cuvslam::Rig cam_rig;
   cam_rig.cameras.resize(node.num_cameras_);
@@ -429,6 +455,18 @@ void VisualSlamNode::VisualSlamImpl::Initialize()
       cam.border_bottom = std::clamp(img_height - roi.y_offset - roi.height, 0U, img_height);
       cam.border_left = std::clamp(roi.x_offset, 0U, img_width);
       cam.border_right = std::clamp(img_width - roi.x_offset - roi.width, 0U, img_width);
+    }
+
+    // Virtual cameras: no features in the band and near the undistortion borders.
+    if (const auto v = virtual_cameras.find(static_cast<int>(i)); v != virtual_cameras.end()) {
+      constexpr int32_t kVirtualMargin = 8;
+      const auto h = static_cast<int32_t>(img_height);
+      const auto w = static_cast<int32_t>(img_width);
+      cam.border_top = std::min(std::max(cam.border_top, v->second.pad_top) + kVirtualMargin, h);
+      cam.border_bottom = std::min(
+        std::max(cam.border_bottom, v->second.pad_bottom) + kVirtualMargin, h);
+      cam.border_left = std::min(cam.border_left + kVirtualMargin, w);
+      cam.border_right = std::min(cam.border_right + kVirtualMargin, w);
     }
 
     // Compensated images have empty (black) borders: keep features away from them.
@@ -934,7 +972,8 @@ void VisualSlamNode::VisualSlamImpl::OnRigFrame(const DeviceSync::RigFrame & fra
 
   std::vector<std::pair<int, ImageType>> images;
   images.reserve(frame.images.size());
-  for (const auto & [camera, msg] : frame.images) {
+  for (const auto & [camera, raw] : frame.images) {
+    const ImageType msg = ToVirtual(camera, raw);
     const int d = camera_device[camera];
     if (d == 0) {
       images.emplace_back(camera, msg);
@@ -971,7 +1010,35 @@ void VisualSlamNode::VisualSlamImpl::OnRigFrame(const DeviceSync::RigFrame & fra
 void VisualSlamNode::VisualSlamImpl::CallbackSynchronizedImages(
   int64_t latest_ts, const std::vector<std::pair<int, ImageType>> & idx_and_image_msgs)
 {
+  // Without device sync the images come straight from the synchronizer: convert the virtual
+  // cameras here (with device sync, OnRigFrame already did it).
+  if (!device_sync && !virtual_cameras.empty()) {
+    std::vector<std::pair<int, ImageType>> images;
+    images.reserve(idx_and_image_msgs.size());
+    for (const auto & [idx, msg] : idx_and_image_msgs) {
+      images.emplace_back(idx, ToVirtual(idx, msg));
+    }
+    sequencer.CallbackStream2(latest_ts, images);
+    return;
+  }
   sequencer.CallbackStream2(latest_ts, idx_and_image_msgs);
+}
+
+ImageType VisualSlamNode::VisualSlamImpl::ToVirtual(int camera, const ImageType & image)
+{
+  const auto v = virtual_cameras.find(camera);
+  if (v == virtual_cameras.end()) {
+    return image;
+  }
+  if (auto out = ApplyVirtualCamera(v->second, *image)) {
+    return out;
+  }
+  RCLCPP_ERROR_THROTTLE(
+    node.get_logger(), *node.get_clock(), 5000,
+    "Camera %d: image %ux%u %s does not match the virtual camera (calibration %ux%u)", camera,
+    image->width, image->height, image->encoding.c_str(), v->second.width,
+    v->second.height - v->second.pad_top - v->second.pad_bottom);
+  return image;
 }
 
 void VisualSlamNode::VisualSlamImpl::UpdatePose(

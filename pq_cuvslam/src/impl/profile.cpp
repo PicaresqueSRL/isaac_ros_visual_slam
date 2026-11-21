@@ -219,6 +219,19 @@ Profile LoadProfile(const std::string & path)
     c.image_topic = r.String(cameras[i], "image_topic", w);
     c.camera_info_topic = r.String(cameras[i], "camera_info_topic", w);
     c.optical_frame = r.String(cameras[i], "optical_frame", w);
+    if (cameras[i]["undistort"]) {
+      c.undistort = r.As<bool>(cameras[i]["undistort"], w + "undistort");
+    }
+    for (const auto & [key, value] : {std::pair<const char *, int *>{"pad_top", &c.pad_top},
+        {"pad_bottom", &c.pad_bottom}})
+    {
+      if (cameras[i][key]) {
+        *value = r.As<int>(cameras[i][key], w + key);
+        if (*value < 0 || *value > 4096) {
+          r.Fail(w + key, "expected 0-4096 pixels");
+        }
+      }
+    }
     p.cameras.push_back(c);
   }
 
