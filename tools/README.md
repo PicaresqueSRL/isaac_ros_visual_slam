@@ -12,6 +12,8 @@ container.
 | `analyze_sync.py` | Timing of a two-camera bag: gaps, stale stamps, capture phase and its drift, clock offset from the gyroscopes |
 | `analyze_images.py` | Image quality of the IR streams: brightness, saturated and dark pixels, projector dots |
 | `check_rotation_compensation.py` | Check of the gyroscope rotation compensation on consecutive frames; gyroscope - image time offset |
+| `mono_scale.py` | Metric scale of a Mono run from the IMU: vertical oscillations of the walk (band 1-3 Hz) in the visual positions and in the double-integrated accelerometer, on sliding windows; evaluation against a metric reference run; scaled `odometry.csv` |
+| `scale_recording.py` | Applies a constant scale to a SLAM recording (MCAP): odometry, paths, landmarks, map/odom TF |
 | `record_slam.sh` | Replays a bag (offline, all frames) and records the SLAM output to MCAP, plus the Rerun MCAP and the CSV files |
 | `run_bag.sh` | Plays a bag at real-time speed with `ros2 bag play` and records the output topics (live-like run) |
 
@@ -63,3 +65,18 @@ Output: `bag/` (MCAP with odometry, paths, status, TF and visualization topics),
 `to_rerun_mcap.py`), `run/` (CSV and `run_info.json`). Run recording containers with
 `--network none`: with the default Docker network the ROS discovery reaches other containers,
 and their messages would end up in the recording.
+
+## Mono scale
+
+```bash
+# Estimate (and evaluate against the stereo IR + IMU run of the same bag, in metres).
+python3 tools/mono_scale.py <bag> <mono run folder> --reference <stereo run folder> \
+  --window 8 --json scale.json --scaled-out <folder>
+# Scaled recording for Rerun.
+python3 tools/scale_recording.py <recording>/bag <recording>/bag_scaled <scale>
+```
+
+The scale is observable only while walking (step bounce); with the camera still or in an
+elevator no window is valid. On the recorded bags the estimate of a window is within 7-17 %
+(median) of the true scale and tends to be 10-15 % low; a Mono run that never initializes
+(all poses at zero) gives no estimate.
