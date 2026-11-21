@@ -134,9 +134,9 @@ namespace visual_slam
 VisualSlamNode::VisualSlamImpl::VisualSlamImpl(VisualSlamNode & vslam_node)
 : node(vslam_node),
   sync(node.num_cameras_ + node.num_input_masks_ +
-    (node.tracking_mode_ == static_cast<int>(TrackingMode::RGBD) ? 1 : 0),
+    (node.UsesDepth() ? 1 : 0),
     1e6 * node.sync_matching_threshold_ms_, node.min_num_images_ +
-    node.num_input_masks_ + (node.tracking_mode_ == static_cast<int>(TrackingMode::RGBD) ? 1 : 0),
+    node.num_input_masks_ + (node.UsesDepth() ? 1 : 0),
     node.image_buffer_size_),
   sequencer(node.imu_buffer_size_, node.imu_jitter_threshold_ms_, node.image_buffer_size_,
     node.image_jitter_threshold_ms_),
@@ -197,7 +197,7 @@ VisualSlamNode::VisualSlamImpl::VisualSlamImpl(VisualSlamNode & vslam_node)
   for (const auto & [idx, topic] : node.GetImageTopics()) {
     std::string name = "camera_" + std::to_string(idx);
     if (idx == static_cast<int>(node.num_cameras_ + node.num_input_masks_) &&
-      node.tracking_mode_ == static_cast<int>(TrackingMode::RGBD))
+      node.UsesDepth())
     {
       name = "depth";
     } else if (node.profile_ && idx < static_cast<int>(node.profile_->cameras.size())) {
@@ -206,16 +206,19 @@ VisualSlamNode::VisualSlamImpl::VisualSlamImpl(VisualSlamNode & vslam_node)
     input_image_names[idx] = {name, topic};
   }
 
-  // Device synchronization from the profile (two or more devices, multicamera mode).
+  // Device synchronization from the profile (two or more devices, multicamera or multisensor
+  // mode without depth).
   if (node.profile_ && node.profile_->sync && node.profile_->sync->mode != SyncMode::NONE &&
     node.profile_->sync->devices.size() >= 2)
   {
     const ProfileSync & s = *node.profile_->sync;
-    if (node.tracking_mode_ != static_cast<int>(TrackingMode::MULTICAMERA) ||
-      node.num_input_masks_ > 0)
-    {
+    const bool sync_mode_ok =
+      node.tracking_mode_ == static_cast<int>(TrackingMode::MULTICAMERA) ||
+      (node.tracking_mode_ == static_cast<int>(TrackingMode::MULTISENSOR) && !node.UsesDepth());
+    if (!sync_mode_ok || node.num_input_masks_ > 0) {
       throw std::invalid_argument(
-              "profile sync between devices is supported in multicamera mode without masks only");
+              "profile sync between devices is supported in multicamera mode and in multisensor "
+              "mode without depth, without masks");
     }
     DeviceSync::Config config;
     config.devices.resize(s.devices.size());
@@ -285,8 +288,11 @@ bool VisualSlamNode::VisualSlamImpl::IsInitialized() const
 
 bool VisualSlamNode::VisualSlamImpl::IsReadyForInitialization() const
 {
+  if (configuration_rejected) {
+    return false;
+  }
   // We need at least one message of every sensor to initialize.
-  if (node.tracking_mode_ == static_cast<int>(TrackingMode::VIO) && !initial_imu_message) {
+  if (node.UsesImu() && !initial_imu_message) {
     return false;
   }
 
@@ -340,7 +346,7 @@ void VisualSlamNode::VisualSlamImpl::Initialize()
         needed.push_back(d.imu_frame);
       }
     }
-    if (node.tracking_mode_ == static_cast<int>(TrackingMode::VIO)) {
+    if (node.UsesImu()) {
       needed.push_back(
         !node.imu_frame_.empty() ? node.imu_frame_ :
         initial_imu_message.value()->header.frame_id);
@@ -461,7 +467,7 @@ void VisualSlamNode::VisualSlamImpl::Initialize()
   // Create the IMU configuration. If the IMU is disabled we just use the identity transform.
   tf2::Transform cv_base_link_pose_cv_imu;
   cv_base_link_pose_cv_imu.setIdentity();
-  if (node.tracking_mode_ == static_cast<int>(TrackingMode::VIO)) {
+  if (node.UsesImu()) {
     const std::string imu_frame =
       !node.imu_frame_.empty() ? node.imu_frame_ : initial_imu_message.value()->header.frame_id;
 
@@ -491,6 +497,13 @@ void VisualSlamNode::VisualSlamImpl::Initialize()
     cuvslam_odometry = std::make_unique<cuvslam::Odometry>(cam_rig, configuration);
     RCLCPP_INFO(node.get_logger(), "Time taken by cuvslam::Odometry::Odometry(): %f",
             ssw_tracker.Stop());
+  } catch (const std::invalid_argument & e) {
+    // The configuration (rig, mode) is rejected: retrying at every frame would fail the same way.
+    RCLCPP_ERROR(
+      node.get_logger(), "cuVSLAM rejected the configuration, the node will not track: %s",
+      e.what());
+    configuration_rejected = true;
+    return;
   } catch (const std::exception & e) {
     RCLCPP_ERROR(node.get_logger(), "Failed to initialize cuvslam::Odometry: %s", e.what());
     return;
@@ -628,7 +641,17 @@ cuvslam::Odometry::Config VisualSlamNode::VisualSlamImpl::CreateOdometryConfigur
   }
   configuration.enable_landmarks_export = node.enable_landmarks_view_ ||
     node.enable_localization_n_mapping_;
-  if (node.tracking_mode_ == static_cast<int>(TrackingMode::RGBD)) {
+  if (node.tracking_mode_ == static_cast<int>(TrackingMode::MULTISENSOR)) {
+    // Multisensor mode: IMU fusion when the rig has an IMU, depth for the listed cameras.
+    std::vector<int32_t> depth_ids;
+    if (node.depth_camera_id_ >= 0) {
+      depth_ids.push_back(node.depth_camera_id_);
+    }
+    compat::SetMultisensorMode(
+      configuration, depth_ids, node.depth_scale_factor_, node.depth_enable_stereo_tracking_);
+  } else if (node.tracking_mode_ == static_cast<int>(TrackingMode::MONO)) {
+    configuration.odometry_mode = cuvslam::Odometry::OdometryMode::Mono;
+  } else if (node.tracking_mode_ == static_cast<int>(TrackingMode::RGBD)) {
     // RGBD mode
     configuration.odometry_mode = cuvslam::Odometry::OdometryMode::RGBD;
     // Configure RGBD settings
@@ -795,7 +818,7 @@ void VisualSlamNode::VisualSlamImpl::PublishGravity(
   rclcpp::Time stamp, const std::string & frame_id,
   const rclcpp::Publisher<MarkerType>::SharedPtr publisher)
 {
-  if (node.tracking_mode_ != static_cast<int>(TrackingMode::VIO)) {
+  if (!node.UsesImu()) {
     return;
   }
   auto maybe_gravity = cuvslam_odometry->GetLastGravity();
@@ -1049,7 +1072,7 @@ void VisualSlamNode::VisualSlamImpl::UpdatePose(
         cuvslam_masks.push_back(
           TocuVSLAMImage(idx, *mask_msg, acquire_pixels(*mask_msg), latest_ts));
       }
-    } else if (node.tracking_mode_ == static_cast<int>(TrackingMode::RGBD) &&  // NOLINT
+    } else if (node.UsesDepth() &&  // NOLINT
       idx == depth_image_idx)
     {
       // This is the depth image for RGBD mode
@@ -1280,7 +1303,7 @@ void VisualSlamNode::VisualSlamImpl::UpdatePose(
 
     // Draw gravity vector
     if (HasSubscribers(node.vis_gravity_pub_) &&
-      node.tracking_mode_ == static_cast<int>(TrackingMode::VIO))
+      node.UsesImu())
     {
       PublishGravity(
         timestamp_output,
@@ -1674,7 +1697,7 @@ void VisualSlamNode::VisualSlamImpl::ReportFrame(
     const int depth_index = node.num_cameras_ + node.num_input_masks_;
     for (const auto & [idx, msg] : images) {
       const bool is_camera = idx < static_cast<int>(node.num_cameras_);
-      const bool is_depth = node.tracking_mode_ == static_cast<int>(TrackingMode::RGBD) &&
+      const bool is_depth = node.UsesDepth() &&
         idx == depth_index;
       if (is_camera || is_depth) {
         stats.emplace_back(idx, ComputeImageStats(*msg, is_depth, node.diagnostics_pixel_stride_));
@@ -1794,7 +1817,7 @@ void VisualSlamNode::VisualSlamImpl::WriteRunOutput()
     node.processing_mode_ == ProcessingMode::OFFLINE ? "offline" : "realtime")
   .Add("mode", TrackingModeToString(node.tracking_mode_))
   .Add("slam", node.enable_localization_n_mapping_)
-  .Add("imu", node.tracking_mode_ == static_cast<int>(TrackingMode::VIO))
+  .Add("imu", node.UsesImu())
   .Add("image_topics", image_topics)
   .Add("imu_topic", node.GetImuTopic())
   .Add("base_frame", node.base_frame_)

@@ -16,13 +16,14 @@ remapping is needed. To change profile at runtime: `deactivate`, `cleanup`, set 
 
 ## Profiles
 
-| Profile | Mode | Streams | cuVSLAM 15 |
+| Profile | Mode | Streams | cuVSLAM |
 |---|---|---|---|
-| `cam2_stereo_imu` | inertial | cam2 IR1 + IR2, cam2 IMU | yes (benchmark configuration) |
-| `cam1_cam2_ir` | multicamera | cam2 IR1 + IR2, cam1 IR1 + IR2 | yes |
-| `cam2_rgbd` | rgbd | cam2 RGB + aligned depth | yes |
-| `cam2_rgb_mono` | mono | cam2 RGB | no: Mono not implemented in the node yet |
-| `cam2_rgbd_imu` | multisensor | cam2 RGB + aligned depth + IMU | no: needs cuVSLAM >= 17 |
+| `cam2_stereo_imu` | inertial | cam2 IR1 + IR2, cam2 IMU | 15-17 (benchmark configuration) |
+| `cam1_cam2_ir` | multicamera | cam2 IR1 + IR2, cam1 IR1 + IR2 | 15-17 |
+| `cam2_rgbd` | rgbd | cam2 RGB + aligned depth | 15-17 |
+| `cam2_rgb_mono` | mono | cam2 RGB | 15-17; trajectory without metric scale |
+| `cam2_rgbd_imu` | multisensor | cam2 RGB + aligned depth + IMU | 17 with cuNLS; experimental in cuVSLAM |
+| `cam1_cam2_rgb_imu` | multisensor | cam2 RGB + cam1 RGB + cam2 IMU, no IR, no depth | 17 with cuNLS; experimental in cuVSLAM |
 
 ## Format
 
@@ -39,7 +40,7 @@ cameras:                              # order = cuVSLAM camera index; stereo pai
     camera_info_topic: /cam2/infra1/camera_info
     optical_frame: cam2_infra1_optical_frame   # overrides the frame of the camera_info
 
-imu:                                  # required for inertial and multisensor
+imu:                                  # required for inertial, optional for multisensor
   topic: /cam2/imu
   frame: cam2_gyro_optical_frame
   noise:
@@ -51,7 +52,7 @@ imu:                                  # required for inertial and multisensor
     source: default                   # where the values come from: default, allan_variance, kalibr...
     date: null                        # date of the measurement
 
-depth:                                # required for rgbd and multisensor
+depth:                                # required for rgbd; multisensor: depth or >= 2 cameras
   topic: /cam2/aligned_depth_to_color/image_raw
   camera_index: 0                     # camera the depth is aligned to
   scale: 1000.0                       # raw depth units per meter (D455: millimeters)

@@ -1,5 +1,4 @@
 # cam2 RGB only, monocular odometry (trajectory up to scale).
-# cuVSLAM supports Mono, the node does not yet (planned): the configuration is rejected.
 name: cam2_rgb_mono
 description: cam2 (forward) RGB camera, monocular odometry, no metric scale
 mode: mono

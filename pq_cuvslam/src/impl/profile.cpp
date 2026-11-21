@@ -328,7 +328,14 @@ std::vector<std::pair<std::string, YAML::Node>> ProfileParameters(const Profile 
     case ProfileMode::MULTICAMERA: set("tracking_mode", 0); break;
     case ProfileMode::INERTIAL: set("tracking_mode", 1); break;
     case ProfileMode::RGBD: set("tracking_mode", 2); break;
-    default: break;  // rejected by CheckProfile
+    case ProfileMode::MONO: set("tracking_mode", 3); break;
+    case ProfileMode::MULTISENSOR:
+      set("tracking_mode", 4);
+      set("multisensor_use_imu", p.imu.has_value());
+      if (!p.depth) {
+        set("depth_camera_id", -1);
+      }
+      break;
   }
   set("base_frame", p.base_frame);
   set("num_cameras", static_cast<int>(p.cameras.size()));
@@ -387,8 +394,11 @@ ProfileCheck CheckProfile(const Profile & p, int cuvslam_major, bool multisensor
       }
       break;
     case ProfileMode::MONO:
-      check.errors.push_back(
-        "mode mono is not implemented in pq_cuvslam yet (cuVSLAM supports it; planned)");
+      if (n != 1) {
+        check.errors.push_back(
+          "mode mono needs exactly one camera; the profile has " + std::to_string(n));
+      }
+      check.warnings.push_back("mode mono: the trajectory has no metric scale");
       break;
     case ProfileMode::MULTISENSOR:
       if (cuvslam_major < 17) {
@@ -398,9 +408,12 @@ ProfileCheck CheckProfile(const Profile & p, int cuvslam_major, bool multisensor
       } else if (!multisensor_available) {
         check.errors.push_back(
           "mode multisensor needs cuVSLAM built with cuNLS (USE_CUNLS)");
-      } else {
-        check.errors.push_back("mode multisensor is not implemented in pq_cuvslam yet");
+      } else if (!p.depth && n < 2) {
+        check.errors.push_back(
+          "mode multisensor needs a depth image (depth section) or at least two cameras with "
+          "overlapping views (cuVSLAM rejects a single camera without depth, with or without IMU)");
       }
+      check.warnings.push_back("mode multisensor is experimental in cuVSLAM 17");
       break;
   }
 
@@ -415,7 +428,9 @@ ProfileCheck CheckProfile(const Profile & p, int cuvslam_major, bool multisensor
   if (p.imu && p.mode != ProfileMode::INERTIAL && p.mode != ProfileMode::MULTISENSOR) {
     check.warnings.push_back("imu section ignored in mode " + mode);
   }
-  if (p.imu && p.mode == ProfileMode::INERTIAL && p.imu->noise_source == "default") {
+  if (p.imu && (p.mode == ProfileMode::INERTIAL || p.mode == ProfileMode::MULTISENSOR) &&
+    p.imu->noise_source == "default")
+  {
     check.warnings.push_back(
       "IMU noise parameters are defaults (imu.noise.source: default), not measured on this IMU "
       "(Allan variance or Kalibr): VIO accuracy may suffer");

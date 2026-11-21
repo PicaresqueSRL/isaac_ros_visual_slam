@@ -200,6 +200,8 @@ struct VisualSlamNode::VisualSlamImpl
   // camera_<i>; "depth"), state for the events.
   std::map<int, std::pair<std::string, std::string>> input_image_names;
   bool last_frame_tracked = true;
+  // cuVSLAM rejected the odometry configuration (invalid_argument): no further attempts.
+  bool configuration_rejected = false;
   bool last_loop_closure = false;
 
   // Sequencer used to sequence imu and image messages.

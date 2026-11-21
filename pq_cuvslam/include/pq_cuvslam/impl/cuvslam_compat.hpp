@@ -34,6 +34,7 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "cuvslam/cuvslam2.h"
 
@@ -74,6 +75,12 @@ std::string CheckRuntimeVersion();
 // Covariance of a pose estimate in the cuVSLAM 15 layout: rotation about x, y, z (rad), then
 // translation x, y, z (m), row-major.
 cuvslam::PoseCovariance PoseCovarianceRotationFirst(const cuvslam::PoseWithCovariance & pose);
+
+// Sets the Multisensor odometry mode (cuVSLAM >= 17): depth images for the cameras in
+// depth_camera_ids (empty: no depth), IMU fusion when the rig has an IMU. Throws before 17.
+void SetMultisensorMode(
+  cuvslam::Odometry::Config & config, const std::vector<int32_t> & depth_camera_ids,
+  float depth_scale_factor, bool enable_depth_stereo_tracking);
 
 // Adds an odometry state to SLAM and returns the SLAM pose.
 cuvslam::Pose SlamTrack(cuvslam::Slam & slam, const cuvslam::Odometry::State & state);

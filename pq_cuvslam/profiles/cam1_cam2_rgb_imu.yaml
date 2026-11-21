@@ -1,0 +1,67 @@
+# cam2 + cam1 RGB cameras and cam2 IMU, cuVSLAM Multisensor mode (cuVSLAM >= 17 with cuNLS),
+# no infrared and no depth: for scenes where the IR stereo and the depth saturate.
+# Multisensor needs two cameras with overlapping views when there is no depth: cam2 looks
+# forward and cam1 49.3 deg down, the overlap is the lower part of the cam2 view.
+name: cam1_cam2_rgb_imu
+description: cam2 (forward) and cam1 (down) RGB cameras with the cam2 IMU, multisensor odometry
+mode: multisensor
+base_frame: cam2_link
+
+cameras:
+  - name: cam2_rgb
+    device: cam2
+    image_topic: /cam2/color/image_raw
+    camera_info_topic: /cam2/color/camera_info
+    optical_frame: cam2_color_optical_frame
+  - name: cam1_rgb
+    device: cam1
+    image_topic: /cam1/color/image_raw
+    camera_info_topic: /cam1/color/camera_info
+    optical_frame: cam1_color_optical_frame
+
+imu:
+  topic: /cam2/imu
+  frame: cam2_gyro_optical_frame
+  noise:
+    gyro_noise_density: 0.000244
+    gyro_random_walk: 0.000019393
+    accel_noise_density: 0.001862
+    accel_random_walk: 0.003
+    frequency: 200.0
+    source: default
+    date: null
+
+# Same extrinsics and software sync as cam1_cam2_ir.
+extrinsics:
+  - parent: cam2_link
+    child: cam1_link
+    translation: [-0.0134, 0.0, -0.0634]   # m
+    rotation_rpy: [0.0, 0.8604, 0.0]       # rad (pitch +49.3 deg)
+    source: >-
+      translation from the holder CAD (D455_HOLDER.stp); pitch estimated from the two
+      gyroscopes on the 17 bags
+    date: null
+
+sync:
+  mode: software
+  max_offset_ms: 34.0
+  rotation_compensation: true
+  compensation_border_px: 16
+  devices:
+    - name: cam2
+      imu_topic: /cam2/imu
+      imu_frame: cam2_gyro_optical_frame
+      clock_offset_ms: 0.0
+    - name: cam1
+      imu_topic: /cam1/imu
+      imu_frame: cam1_gyro_optical_frame
+      clock_offset_ms: 0.0
+
+hardware:
+  ir_emitter: false
+
+parameters:
+  rectified_images: false        # the D455 RGB stream is distorted (plumb_bob)
+  enable_image_denoising: false
+  image_jitter_threshold_ms: 150.0
+  enable_localization_n_mapping: true

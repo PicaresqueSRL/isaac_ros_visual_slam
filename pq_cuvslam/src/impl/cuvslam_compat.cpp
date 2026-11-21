@@ -67,6 +67,26 @@ cuvslam::PoseCovariance PoseCovarianceRotationFirst(const cuvslam::PoseWithCovar
 #endif
 }
 
+void SetMultisensorMode(
+  cuvslam::Odometry::Config & config, const std::vector<int32_t> & depth_camera_ids,
+  float depth_scale_factor, bool enable_depth_stereo_tracking)
+{
+#if PQ_CUVSLAM_VERSION_MAJOR >= 17
+  config.odometry_mode = cuvslam::Odometry::OdometryMode::Multisensor;
+  config.multisensor_settings.depth_camera_ids = depth_camera_ids;
+  config.multisensor_settings.depth_scale_factor = depth_scale_factor;
+  config.multisensor_settings.enable_depth_stereo_tracking = enable_depth_stereo_tracking;
+#else
+  (void)config;
+  (void)depth_camera_ids;
+  (void)depth_scale_factor;
+  (void)enable_depth_stereo_tracking;
+  throw std::invalid_argument(
+          "Multisensor odometry needs cuVSLAM >= 17 (this build: " +
+          std::to_string(PQ_CUVSLAM_VERSION_MAJOR) + ")");
+#endif
+}
+
 cuvslam::Pose SlamTrack(cuvslam::Slam & slam, const cuvslam::Odometry::State & state)
 {
 #if PQ_CUVSLAM_VERSION_MAJOR >= 17

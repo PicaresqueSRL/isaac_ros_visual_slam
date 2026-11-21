@@ -1,5 +1,7 @@
 # cam2 RGB + aligned depth + cam2 IMU: cuVSLAM Multisensor mode (cuVSLAM >= 17).
-# Rejected with cuVSLAM 15.
+# Needs cuVSLAM >= 17 built with cuNLS; rejected otherwise. Experimental in cuVSLAM 17.
+# cuVSLAM rejects a single RGB camera with IMU and no depth: Multisensor needs a depth image or
+# two cameras with overlapping views.
 name: cam2_rgbd_imu
 description: cam2 (forward) RGB camera, aligned depth and IMU, multisensor odometry
 mode: multisensor

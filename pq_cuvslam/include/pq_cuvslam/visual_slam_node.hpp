@@ -52,7 +52,9 @@ enum class TrackingMode : int
 {
   MULTICAMERA = 0,  ///< Default multicamera stereo tracking
   VIO = 1,          ///< Visual-Inertial Odometry (IMU fusion required)
-  RGBD = 2          ///< RGBD depth-based tracking
+  RGBD = 2,         ///< RGBD depth-based tracking
+  MONO = 3,         ///< Single camera, trajectory up to scale
+  MULTISENSOR = 4   ///< cuVSLAM >= 17 with cuNLS: cameras, optional depth, optional IMU
 };
 
 /// Convert TrackingMode enum to string representation
@@ -65,6 +67,10 @@ inline const char * TrackingModeToString(int mode)
       return "VIO (IMU fusion)";
     case static_cast<int>(TrackingMode::RGBD):
       return "RGBD";
+    case static_cast<int>(TrackingMode::MONO):
+      return "Mono";
+    case static_cast<int>(TrackingMode::MULTISENSOR):
+      return "Multisensor";
     default:
       return "Unknown";
   }
@@ -216,8 +222,26 @@ private:
 
   // Tracking mode: determines the type of odometry algorithm used.
   // Stored as int for ROS 2 parameter compatibility, but should be compared
-  // against TrackingMode enum values: MULTICAMERA (0), VIO (1), or RGBD (2).
+  // against TrackingMode enum values: MULTICAMERA (0), VIO (1), RGBD (2), MONO (3),
+  // MULTISENSOR (4).
   int tracking_mode_;
+
+  // Multisensor mode: fuse the IMU (imu_frame, noise parameters, IMU topic). The depth is used
+  // when depth_camera_id >= 0.
+  bool multisensor_use_imu_;
+
+  // The mode uses the IMU (VIO, Multisensor with IMU) / a depth image (RGBD, Multisensor with
+  // depth).
+  bool UsesImu() const
+  {
+    return tracking_mode_ == static_cast<int>(TrackingMode::VIO) ||
+           (tracking_mode_ == static_cast<int>(TrackingMode::MULTISENSOR) && multisensor_use_imu_);
+  }
+  bool UsesDepth() const
+  {
+    return tracking_mode_ == static_cast<int>(TrackingMode::RGBD) ||
+           (tracking_mode_ == static_cast<int>(TrackingMode::MULTISENSOR) && depth_camera_id_ >= 0);
+  }
 
   // Enable IMU debug mode
   bool enable_debug_imu_mode_;

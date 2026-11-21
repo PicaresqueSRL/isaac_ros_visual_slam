@@ -116,14 +116,16 @@ void VisualSlamNode::DeclareAndReadParameters()
   {
     rcl_interfaces::msg::ParameterDescriptor descriptor;
     descriptor.description =
-      "Tracking mode: 0 = Multicamera (default), 1 = VIO (IMU fusion), 2 = RGBD";
+      "Tracking mode: 0 = Multicamera (default), 1 = VIO (IMU fusion), 2 = RGBD, 3 = Mono, "
+      "4 = Multisensor (cuVSLAM >= 17)";
     rcl_interfaces::msg::IntegerRange range;
     range.from_value = 0;
-    range.to_value = 2;
+    range.to_value = 4;
     range.step = 1;
     descriptor.integer_range.push_back(range);
     tracking_mode_ = Param<int>("tracking_mode", 0, descriptor);
   }
+  multisensor_use_imu_ = Param<bool>("multisensor_use_imu", true);
   enable_debug_imu_mode_ = Param<bool>("debug_imu_mode", false);
   imu_params_ = IMUParams{
     Param<double>("gyro_noise_density", 0.000244),
@@ -228,11 +230,29 @@ void VisualSlamNode::CheckSetup()
   }
 
   if (tracking_mode_ < static_cast<int>(TrackingMode::MULTICAMERA) ||
-    tracking_mode_ > static_cast<int>(TrackingMode::RGBD))
+    tracking_mode_ > static_cast<int>(TrackingMode::MULTISENSOR))
   {
     throw std::invalid_argument(
             "invalid tracking_mode " + std::to_string(tracking_mode_) +
-            ", valid values are 0 (Multicamera), 1 (VIO), 2 (RGBD)");
+            ", valid values are 0 (Multicamera), 1 (VIO), 2 (RGBD), 3 (Mono), 4 (Multisensor)");
+  }
+  if (tracking_mode_ == static_cast<int>(TrackingMode::MONO) && num_cameras_ != 1) {
+    throw std::invalid_argument(
+            "tracking_mode 3 (Mono) needs exactly one camera (num_cameras " +
+            std::to_string(num_cameras_) + ")");
+  }
+  if (tracking_mode_ == static_cast<int>(TrackingMode::MULTISENSOR)) {
+    if (!features.multisensor) {
+      throw std::invalid_argument(
+              "tracking_mode 4 (Multisensor) needs cuVSLAM >= 17 built with cuNLS; this build: "
+              "cuVSLAM " + std::to_string(features.major) + ", cuNLS " +
+              (features.cunls ? "on" : "off"));
+    }
+    if (depth_camera_id_ < 0 && num_cameras_ < 2) {
+      throw std::invalid_argument(
+              "tracking_mode 4 (Multisensor) needs a depth image (depth_camera_id >= 0) or at "
+              "least two cameras with overlapping views");
+    }
   }
   RCLCPP_INFO(get_logger(), "Tracking mode: %s", TrackingModeToString(tracking_mode_));
   RCLCPP_INFO(
@@ -306,7 +326,7 @@ void VisualSlamNode::CreateInterfaces()
   }
 
   depth_image_subs_.clear();
-  if (tracking_mode_ == static_cast<int>(TrackingMode::RGBD)) {
+  if (UsesDepth()) {
     const uint cb_index = num_cameras_ + num_input_masks_;
     depth_image_subs_.push_back(
       create_subscription<sensor_msgs::msg::Image>(
@@ -326,7 +346,7 @@ void VisualSlamNode::CreateInterfaces()
   }
 
   imu_sub_.reset();
-  if (tracking_mode_ == static_cast<int>(TrackingMode::VIO)) {
+  if (UsesImu()) {
     imu_sub_ = create_subscription<ImuType>(
       imu_topic, imu_qos_,
       std::bind(&VisualSlamNode::CallbackImu, this, std::placeholders::_1));
