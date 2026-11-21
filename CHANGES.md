@@ -27,7 +27,7 @@ This file records every change made to it. Update it with each change.
 | Run output | topics only | also CSV + `run_info.json` (`run_output_dir`), format of `run_output.py` |
 | Build | Isaac ROS container | `docker/Dockerfile` (ROS 2 Lyrical, Ubuntu 24.04, CUDA 13) |
 | Configuration | launch parameters + remappings + `static_transform_publisher` | YAML profiles (`profile`): cameras, topics, frames, IMU, depth, extrinsics with source, mode |
-| Modes | 0, 1, 2 | same (multicamera, inertial, rgbd); profiles for mono and multisensor rejected with a clear message |
+| Modes | 0, 1, 2 | also 3 (Mono) and 4 (Multisensor, cuVSLAM >= 17 with cuNLS; optional depth and IMU) |
 | Launch files | Isaac Sim, RealSense, ZED, multi-camera, core | standalone node, `slam.launch.py profile:=...` |
 | Tests | integration tests on NVIDIA r2b bags | unit tests only (sequencer, vendored isaac_common) |
 
@@ -242,6 +242,15 @@ This file records every change made to it. Update it with each change.
   down to 2.7 GB), `CUDA_COMPAT=remove` (the cuda-compat hook of the NVIDIA Container Toolkit
   1.19.1 crashes on the compat libraries of the image). Build arguments moved after the system
   and ROS layers. The node configures with the GPU and activates.
+
+**Mono and Multisensor** (`80bf010`)
+- `tracking_mode` 3 (Mono) and 4 (Multisensor: cameras, optional depth, optional IMU,
+  `multisensor_use_imu`); profiles `cam2_rgb_mono` and `cam2_rgbd_imu` now accepted, new
+  `cam1_cam2_rgb_imu`. Device sync allowed in Multisensor without depth. A configuration
+  rejected by cuVSLAM is reported once instead of at every frame.
+- cuVSLAM limits: Mono does not fuse the IMU; Multisensor without depth needs two cameras whose
+  views overlap by more than 50 % at 2-4 m (hard-coded), so `cam1_cam2_rgb_imu` is rejected
+  with our holder (cam1 49.3 deg lower than cam2).
 
 ## Notes
 
