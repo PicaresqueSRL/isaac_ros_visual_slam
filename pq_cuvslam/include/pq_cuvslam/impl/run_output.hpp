@@ -23,12 +23,14 @@
 
 #include <chrono>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "cuvslam/cuvslam2.h"
+#include "pq_cuvslam/impl/image_stats.hpp"
 #include "tf2/LinearMath/Transform.hpp"
 
 namespace pq
@@ -70,6 +72,9 @@ private:
 //   slam_metrics.csv   per frame: loop closure and pose graph optimization status (with SLAM)
 //   loop_closures.csv  last loop closure poses reported by SLAM, in the SLAM world frame
 //                      (rig, OpenCV axes)
+//   streams.csv        per frame and input image: brightness, saturated and dark pixels,
+//                      valid depth (see image_stats.hpp)
+//   events.csv         events: tracking lost / recovered, loop closures, ...
 //   run_info.json      input, parameters, versions, frame counts and summary metrics
 //
 // Pose columns: timestamp,x,y,z,qx,qy,qz,qw,roll_deg,pitch_deg,yaw_deg. Timestamps in seconds.
@@ -96,6 +101,9 @@ public:
 
   void AddSlamMetrics(int64_t timestamp_ns, const cuvslam::Slam::Metrics & metrics);
 
+  void AddStreamStats(int64_t timestamp_ns, const std::string & stream, const ImageStats & stats);
+  void AddEvent(int64_t timestamp_ns, const std::string & type, const std::string & description);
+
   // Writes all files. slam may be null (SLAM disabled). info is extended with the summary
   // and the list of files. Returns false if the folder cannot be written.
   bool Write(const cuvslam::Slam * slam, JsonObject info);
@@ -117,6 +125,12 @@ private:
   std::vector<Row> slam_online_;
   std::vector<Row> status_;
   std::vector<Row> slam_metrics_;
+  std::vector<Row> streams_;
+  std::vector<Row> events_;
+  // Per stream: saturated (or valid depth) percent of every frame, for the summary.
+  std::map<std::string, std::vector<double>> stream_saturated_;
+  std::map<std::string, std::vector<double>> stream_valid_depth_;
+  std::map<std::string, uint64_t> event_counts_;
   std::vector<double> track_times_ms_;
   std::vector<tf2::Vector3> odometry_positions_;
   std::vector<int64_t> odometry_stamps_;

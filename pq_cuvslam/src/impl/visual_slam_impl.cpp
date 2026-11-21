@@ -193,6 +193,19 @@ VisualSlamNode::VisualSlamImpl::VisualSlamImpl(VisualSlamNode & vslam_node)
     tf_static_publisher->sendTransform(transforms);
   }
 
+  // Names and topics of the input images, for the diagnostics.
+  for (const auto & [idx, topic] : node.GetImageTopics()) {
+    std::string name = "camera_" + std::to_string(idx);
+    if (idx == static_cast<int>(node.num_cameras_ + node.num_input_masks_) &&
+      node.tracking_mode_ == static_cast<int>(TrackingMode::RGBD))
+    {
+      name = "depth";
+    } else if (node.profile_ && idx < static_cast<int>(node.profile_->cameras.size())) {
+      name = node.profile_->cameras[idx].name;
+    }
+    input_image_names[idx] = {name, topic};
+  }
+
   // Device synchronization from the profile (two or more devices, multicamera mode).
   if (node.profile_ && node.profile_->sync && node.profile_->sync->mode != SyncMode::NONE &&
     node.profile_->sync->devices.size() >= 2)
@@ -531,6 +544,10 @@ void VisualSlamNode::VisualSlamImpl::Initialize()
 #endif
   }
   RCLCPP_INFO(node.get_logger(), "cuVSLAM tracker was successfully initialized.");
+  PublishEvent(
+    SlamEventType::TRACKER_INITIALIZED,
+    rclcpp::Time(initial_camera_info_messages.at(0).value()->header.stamp).nanoseconds(),
+    std::to_string(node.num_cameras_) + " cameras");
 
   if (node.localize_on_startup_) {
     // We don't care when this thread returns since we anyways can't do anything if the localization
@@ -1286,12 +1303,11 @@ void VisualSlamNode::VisualSlamImpl::UpdatePose(
   if (values.size()) {
     track_execution_time_mean /= values.size();
   }
-  if (run_output) {
-    AddRunOutputFrame(latest_ts, vo_success, output_odom_pose, output_slam_pose,
-      track_execution_time * 1000.0,
-      std::chrono::duration<double, std::milli>(
-        std::chrono::steady_clock::now() - callback_start).count());
-  }
+  ReportFrame(latest_ts, vo_success, output_odom_pose, output_slam_pose,
+    track_execution_time * 1000.0,
+    std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - callback_start).count(),
+    idx_and_image_msgs);
 
   // Publish status.
   std_msgs::msg::Header header;
@@ -1556,30 +1572,76 @@ void VisualSlamNode::VisualSlamImpl::CheckLocalizationStatus()
   }
 }
 
-void VisualSlamNode::VisualSlamImpl::AddRunOutputFrame(
+void VisualSlamNode::VisualSlamImpl::PublishEvent(
+  uint8_t type, int64_t stamp_ns, const std::string & description)
+{
+  static const std::map<uint8_t, std::string> kNames = {
+    {SlamEventType::TRACKING_LOST, "tracking_lost"},
+    {SlamEventType::TRACKING_RECOVERED, "tracking_recovered"},
+    {SlamEventType::LOOP_CLOSURE, "loop_closure"},
+    {SlamEventType::CONFIGURED, "configured"},
+    {SlamEventType::TRACKER_INITIALIZED, "tracker_initialized"}};
+  const auto name_it = kNames.find(type);
+  const std::string name = name_it != kNames.end() ? name_it->second : std::to_string(type);
+  if (node.events_pub_) {
+    SlamEventType msg;
+    msg.header.stamp = rclcpp::Time(stamp_ns);
+    msg.header.frame_id = node.map_frame_;
+    msg.type = type;
+    msg.description = description;
+    node.events_pub_->publish(msg);
+  }
+  if (type == SlamEventType::TRACKING_LOST) {
+    RCLCPP_WARN(node.get_logger(), "Event %s: %s", name.c_str(), description.c_str());
+  } else {
+    RCLCPP_INFO(node.get_logger(), "Event %s: %s", name.c_str(), description.c_str());
+  }
+  if (run_output) {
+    run_output->AddEvent(stamp_ns, name, description);
+  }
+}
+
+void VisualSlamNode::VisualSlamImpl::ReportFrame(
   int64_t timestamp_ns, bool tracked, const std::optional<tf2::Transform> & odom_pose,
   const std::optional<tf2::Transform> & slam_pose, double track_time_ms,
-  double callback_time_ms)
+  double callback_time_ms, const std::vector<std::pair<int, ImageType>> & images)
 {
+  const bool publish_diagnostics = node.enable_frame_diagnostics_ &&
+    HasSubscribers(node.frame_diagnostics_pub_);
+  const bool details = publish_diagnostics || run_output;
+
   // Observations and landmarks are available only when their export is enabled
   // (see CreateOdometryConfiguration).
   std::vector<size_t> observations(node.num_cameras_, 0);
   size_t num_landmarks = 0;
-  const bool observations_exported = node.enable_observations_view_ ||
-    node.enable_localization_n_mapping_;
-  const bool landmarks_exported = node.enable_landmarks_view_ ||
-    node.enable_localization_n_mapping_;
-  try {
-    if (observations_exported) {
-      for (uint32_t i = 0; i < node.num_cameras_; ++i) {
-        observations[i] = cuvslam_odometry->GetLastObservations(i).size();
+  if (details) {
+    const bool observations_exported = node.enable_observations_view_ ||
+      node.enable_localization_n_mapping_;
+    const bool landmarks_exported = node.enable_landmarks_view_ ||
+      node.enable_localization_n_mapping_;
+    try {
+      if (observations_exported) {
+        for (uint32_t i = 0; i < node.num_cameras_; ++i) {
+          observations[i] = cuvslam_odometry->GetLastObservations(i).size();
+        }
       }
+      if (landmarks_exported) {
+        num_landmarks = cuvslam_odometry->GetLastLandmarks().size();
+      }
+    } catch (const std::exception & e) {
+      RCLCPP_WARN_ONCE(node.get_logger(), "Cannot read observations: %s", e.what());
     }
-    if (landmarks_exported) {
-      num_landmarks = cuvslam_odometry->GetLastLandmarks().size();
+  }
+
+  std::optional<cuvslam::Slam::Metrics> metrics;
+  if (cuvslam_slam) {
+    try {
+      cuvslam::Slam::Metrics m;
+      cuvslam_slam->GetSlamMetrics(m);
+      metrics = m;
+    } catch (const std::exception & e) {
+      RCLCPP_WARN_ONCE(node.get_logger(), "Cannot read SLAM metrics: %s", e.what());
     }
-  } catch (const std::exception & e) {
-    RCLCPP_WARN_ONCE(node.get_logger(), "Run output: cannot read observations: %s", e.what());
   }
 
   std::optional<double> sync_offset_ms;
@@ -1590,17 +1652,84 @@ void VisualSlamNode::VisualSlamImpl::AddRunOutputFrame(
     frame_sync_offset_ms.erase(
       frame_sync_offset_ms.begin(), frame_sync_offset_ms.upper_bound(timestamp_ns));
   }
-  run_output->AddFrame(
-    timestamp_ns, tracked, odom_pose, slam_pose, track_time_ms, num_landmarks, observations,
-    callback_time_ms, sync_offset_ms);
 
-  if (cuvslam_slam) {
-    try {
-      cuvslam::Slam::Metrics metrics;
-      cuvslam_slam->GetSlamMetrics(metrics);
-      run_output->AddSlamMetrics(timestamp_ns, metrics);
-    } catch (const std::exception & e) {
-      RCLCPP_WARN_ONCE(node.get_logger(), "Run output: cannot read SLAM metrics: %s", e.what());
+  // Events.
+  if (tracked != last_frame_tracked) {
+    PublishEvent(
+      tracked ? SlamEventType::TRACKING_RECOVERED : SlamEventType::TRACKING_LOST, timestamp_ns,
+      tracked ? "visual tracking recovered" : "visual tracking lost");
+    last_frame_tracked = tracked;
+  }
+  const bool loop_closure = metrics && metrics->lc_status;
+  if (loop_closure && !last_loop_closure) {
+    PublishEvent(
+      SlamEventType::LOOP_CLOSURE, timestamp_ns,
+      "loop closure, " + std::to_string(metrics->lc_good_landmarks_count) + " landmarks");
+  }
+  last_loop_closure = loop_closure;
+
+  // Statistics of the input images.
+  std::vector<std::pair<int, ImageStats>> stats;
+  if (details) {
+    const int depth_index = node.num_cameras_ + node.num_input_masks_;
+    for (const auto & [idx, msg] : images) {
+      const bool is_camera = idx < static_cast<int>(node.num_cameras_);
+      const bool is_depth = node.tracking_mode_ == static_cast<int>(TrackingMode::RGBD) &&
+        idx == depth_index;
+      if (is_camera || is_depth) {
+        stats.emplace_back(idx, ComputeImageStats(*msg, is_depth, node.diagnostics_pixel_stride_));
+      }
+    }
+  }
+
+  if (publish_diagnostics) {
+    FrameDiagnosticsType d;
+    d.header.stamp = rclcpp::Time(timestamp_ns);
+    d.header.frame_id = node.map_frame_;
+    d.mode = TrackingModeToString(node.tracking_mode_);
+    d.profile = node.profile_ ? node.profile_->name : "";
+    d.tracked = tracked;
+    d.track_time_ms = static_cast<float>(track_time_ms);
+    d.callback_time_ms = static_cast<float>(callback_time_ms);
+    // Latency from the capture: meaningful only with live data (NaN in a bag replay).
+    d.latency_ms = run_input.empty() ?
+      static_cast<float>((node.get_clock()->now().nanoseconds() - timestamp_ns) / 1e6) :
+      std::numeric_limits<float>::quiet_NaN();
+    d.sync_offset_ms = sync_offset_ms ? static_cast<float>(*sync_offset_ms) :
+      std::numeric_limits<float>::quiet_NaN();
+    for (uint32_t i = 0; i < node.num_cameras_; ++i) {
+      d.camera_names.push_back(input_image_names[i].first);
+      d.observations.push_back(static_cast<uint32_t>(observations[i]));
+    }
+    d.landmarks = static_cast<uint32_t>(num_landmarks);
+    d.loop_closure = loop_closure;
+    d.pose_graph_optimized = metrics && metrics->pgo_status;
+    for (const auto & [idx, st] : stats) {
+      StreamStatsType ss;
+      ss.name = input_image_names[idx].first;
+      ss.topic = input_image_names[idx].second;
+      const auto & msg = std::find_if(
+        images.begin(), images.end(), [i = idx](const auto & p) {return p.first == i;})->second;
+      ss.width = msg->width;
+      ss.height = msg->height;
+      ss.mean_intensity = st.mean_intensity;
+      ss.saturated_pct = st.saturated_pct;
+      ss.dark_pct = st.dark_pct;
+      ss.valid_depth_pct = st.valid_depth_pct;
+      d.streams.push_back(ss);
+    }
+    node.frame_diagnostics_pub_->publish(d);
+  }
+
+  if (run_output) {
+    run_output->AddFrame(
+      timestamp_ns, tracked, odom_pose, slam_pose, track_time_ms, num_landmarks, observations,
+      callback_time_ms, sync_offset_ms);
+    if (metrics) {
+      run_output->AddSlamMetrics(timestamp_ns, *metrics);
+    }
+    for (const auto & [idx, st] : stats) {
+      run_output->AddStreamStats(timestamp_ns, input_image_names[idx].first, st);
     }
   }
 }

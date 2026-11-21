@@ -305,6 +305,31 @@ void RunOutput::AddSlamMetrics(int64_t timestamp_ns, const cuvslam::Slam::Metric
   frames_with_pgo_ += m.pgo_status ? 1 : 0;
 }
 
+void RunOutput::AddStreamStats(
+  int64_t timestamp_ns, const std::string & stream, const ImageStats & s)
+{
+  const auto num = [](float v) {
+      return std::isfinite(v) ? FormatDouble(std::round(v * 100.0) / 100.0) : std::string("nan");
+    };
+  streams_.push_back({
+        FormatDouble(timestamp_ns / 1e9), stream, num(s.mean_intensity), num(s.saturated_pct),
+        num(s.dark_pct), num(s.valid_depth_pct)});
+  if (s.depth) {
+    stream_valid_depth_[stream].push_back(s.valid_depth_pct);
+  } else {
+    stream_saturated_[stream].push_back(s.saturated_pct);
+  }
+}
+
+void RunOutput::AddEvent(
+  int64_t timestamp_ns, const std::string & type, const std::string & description)
+{
+  std::string text = description;
+  std::replace(text.begin(), text.end(), ',', ';');  // keep the CSV simple
+  events_.push_back({FormatDouble(timestamp_ns / 1e9), type, text});
+  ++event_counts_[type];
+}
+
 bool RunOutput::Write(const cuvslam::Slam * slam, JsonObject info)
 {
   namespace fs = std::filesystem;
@@ -407,6 +432,37 @@ bool RunOutput::Write(const cuvslam::Slam * slam, JsonObject info)
     files.push_back("slam_metrics.csv");
     summary.Add("frames_with_pgo", static_cast<uint64_t>(frames_with_pgo_));
     summary.Add("frames_with_lc", static_cast<uint64_t>(frames_with_lc_));
+  }
+
+  if (!streams_.empty()) {
+    ok &= WriteCsv(
+      dir / "streams.csv",
+      {"timestamp", "stream", "mean_intensity", "saturated_pct", "dark_pct", "valid_depth_pct"},
+      streams_);
+    files.push_back("streams.csv");
+    JsonObject streams;
+    for (const auto & [name, values] : stream_saturated_) {
+      JsonObject s;
+      s.Add("saturated_pct_median", Median(values));
+      s.Add("frames_saturated_over_20pct", static_cast<uint64_t>(
+          std::count_if(values.begin(), values.end(), [](double v) {return v > 20.0;})));
+      streams.Add(name, s);
+    }
+    for (const auto & [name, values] : stream_valid_depth_) {
+      JsonObject s;
+      s.Add("valid_depth_pct_median", Median(values));
+      streams.Add(name, s);
+    }
+    summary.Add("streams", streams);
+  }
+  ok &= WriteCsv(dir / "events.csv", {"timestamp", "type", "description"}, events_);
+  files.push_back("events.csv");
+  {
+    JsonObject events;
+    for (const auto & [type, count] : event_counts_) {
+      events.Add(type, count);
+    }
+    summary.Add("events", events);
   }
 
   files.push_back("run_info.json");

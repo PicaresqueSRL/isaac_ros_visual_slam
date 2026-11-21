@@ -30,6 +30,9 @@
 #include "isaac_ros_visual_slam_interfaces/srv/reset.hpp"
 #include "isaac_ros_visual_slam_interfaces/srv/set_slam_pose.hpp"
 #include "nav_msgs/msg/odometry.hpp"
+#include "pq_cuvslam_interfaces/msg/frame_diagnostics.hpp"
+#include "pq_cuvslam_interfaces/msg/slam_event.hpp"
+#include "pq_cuvslam_interfaces/msg/stream_stats.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "sensor_msgs/msg/camera_info.hpp"
 #include "sensor_msgs/msg/image.hpp"
@@ -54,6 +57,9 @@ using OdometryType = nav_msgs::msg::Odometry;
 using PathType = nav_msgs::msg::Path;
 
 using VisualSlamStatusType = isaac_ros_visual_slam_interfaces::msg::VisualSlamStatus;
+using FrameDiagnosticsType = pq_cuvslam_interfaces::msg::FrameDiagnostics;
+using SlamEventType = pq_cuvslam_interfaces::msg::SlamEvent;
+using StreamStatsType = pq_cuvslam_interfaces::msg::StreamStats;
 
 using DiagnosticArrayType = diagnostic_msgs::msg::DiagnosticArray;
 using DiagnosticStatusType = diagnostic_msgs::msg::DiagnosticStatus;

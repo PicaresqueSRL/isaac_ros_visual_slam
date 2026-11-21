@@ -177,6 +177,8 @@ void VisualSlamNode::DeclareAndReadParameters()
   enable_request_hint_ = Param<bool>("enable_request_hint", true);
   // Wrapper parameters:
   run_output_dir_ = Param<std::string>("run_output_dir", "");
+  enable_frame_diagnostics_ = Param<bool>("enable_frame_diagnostics", true);
+  diagnostics_pixel_stride_ = Param<int>("diagnostics_pixel_stride", 4);
   {
     rcl_interfaces::msg::ParameterDescriptor descriptor;
     descriptor.description =
@@ -370,6 +372,11 @@ void VisualSlamNode::CreateInterfaces()
   tracking_slam_path_pub_ =
     create_publisher<PathType>("visual_slam/tracking/slam_path", default_qos);
   diagnostics_pub_ = create_publisher<DiagnosticArrayType>("/diagnostics", default_qos);
+  frame_diagnostics_pub_ =
+    create_publisher<FrameDiagnosticsType>("visual_slam/diagnostics/frame", default_qos);
+  // Events: reliable and transient local, so that a late subscriber gets the recent ones.
+  events_pub_ = create_publisher<SlamEventType>(
+    "visual_slam/events", rclcpp::QoS(100).reliable().transient_local());
 
   // Publishers: sends a message to request another pose hint.
   trigger_hint_pub_.reset();
@@ -448,6 +455,8 @@ void VisualSlamNode::DestroyInterfaces()
   tracking_vo_path_pub_.reset();
   tracking_slam_path_pub_.reset();
   diagnostics_pub_.reset();
+  frame_diagnostics_pub_.reset();
+  events_pub_.reset();
   trigger_hint_pub_.reset();
   vis_observations_pub_.reset();
   vis_gravity_pub_.reset();
@@ -587,6 +596,12 @@ CallbackReturn VisualSlamNode::on_configure(const rclcpp_lifecycle::State &)
     CheckSetup();
     CreateInterfaces();
     impl_ = std::make_unique<VisualSlamImpl>(*this);
+    impl_->PublishEvent(
+      SlamEventType::CONFIGURED, get_clock()->now().nanoseconds(),
+      std::string("mode ") + TrackingModeToString(tracking_mode_) +
+      (profile_ ? ", profile " + profile_->name : std::string()) + ", cuVSLAM " +
+      std::to_string(PQ_CUVSLAM_VERSION_MAJOR) + "." + std::to_string(PQ_CUVSLAM_VERSION_MINOR) +
+      "." + std::to_string(PQ_CUVSLAM_VERSION_PATCH));
   } catch (const std::exception & e) {
     RCLCPP_ERROR(get_logger(), "Configuration failed: %s", e.what());
     impl_.reset();

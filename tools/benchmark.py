@@ -80,6 +80,7 @@ METRICS = [
     ('gyro_p95_deg', 'gyro p95', 'deg', True),
     ('gyro_glitches', '>2deg', '', True),
     ('track_ms_median', 'track ms', 'ms', True),
+    ('saturated_pct', 'saturated', '%', False),
     ('gt_rmse_m', 'GT RMSE', 'm', True),
 ]
 
@@ -237,6 +238,10 @@ def run_one(args, bag, profile, info, available):
         track_ms_median=s.get('track_time_ms_median'),
         path_m=(s.get('odometry') or {}).get('path_length_m'),
         sync_offset_ms=((run_info.get('sync') or {}).get('offset_ms') or {}).get('median'),
+        # Highest median share of saturated pixels among the input streams.
+        saturated_pct=max((v['saturated_pct_median'] for v in (s.get('streams') or {}).values()
+                           if 'saturated_pct_median' in v), default=None),
+        events=s.get('events'),
     )
     if args.repeat > 1:
         row['deterministic'] = len(set(hashes)) == 1
@@ -262,7 +267,8 @@ def write_summary(args, rows, meta):
         json.dump({'meta': meta, 'runs': rows}, f, indent=2)
     keys = ['profile', 'bag', 'status', 'reason', 'frames', 'frames_lost', 'gyro_rms_deg',
             'gyro_median_deg', 'gyro_p95_deg', 'gyro_glitches', 'track_ms_median',
-            'replay_wall_s', 'path_m', 'sync_offset_ms', 'deterministic', 'gt_rmse_m',
+            'replay_wall_s', 'path_m', 'sync_offset_ms', 'saturated_pct', 'deterministic',
+            'gt_rmse_m',
             'cuvslam', 'wrapper']
     with open(os.path.join(args.out, 'summary.csv'), 'w', newline='') as f:
         w = csv.DictWriter(f, fieldnames=keys, extrasaction='ignore')
@@ -275,18 +281,19 @@ def write_summary(args, rows, meta):
              'Rotation error against the gyroscope of the base camera, per frame; the ground '
              'truth (GT) is an indication only.', '',
              '| profile | bag | status | frames | lost | gyro RMS deg | gyro p95 deg | >2deg | '
-             'track ms | determ. | GT RMSE m |',
-             '|---|---|---|---|---|---|---|---|---|---|---|']
+             'track ms | saturated % | determ. | GT RMSE m |',
+             '|---|---|---|---|---|---|---|---|---|---|---|---|']
     for r in rows:
         if r['status'] != 'ok':
             lines.append(f"| {r['profile']} | {r['bag']} | {r['status']}: {r.get('reason', '')} "
-                         '| | | | | | | | |')
+                         '| | | | | | | | | |')
             continue
         lines.append(
             f"| {r['profile']} | {r['bag']} | ok | {fmt(r.get('frames'))} | "
             f"{fmt(r.get('frames_lost'))} | {fmt(r.get('gyro_rms_deg'))} | "
             f"{fmt(r.get('gyro_p95_deg'))} | {fmt(r.get('gyro_glitches'))} | "
-            f"{fmt(r.get('track_ms_median'), 2)} | {fmt(r.get('deterministic'))} | "
+            f"{fmt(r.get('track_ms_median'), 2)} | {fmt(r.get('saturated_pct'), 1)} | "
+            f"{fmt(r.get('deterministic'))} | "
             f"{fmt(r.get('gt_rmse_m'))} |")
     with open(os.path.join(args.out, 'report.md'), 'w') as f:
         f.write('\n'.join(lines) + '\n')

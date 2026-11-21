@@ -40,6 +40,7 @@
 #include "pq_cuvslam/third_party/isaac_common/messaging/message_stream_synchronizer.hpp"
 #include "pq_cuvslam/impl/cuvslam_compat.hpp"
 #include "pq_cuvslam/impl/device_frame_synchronizer.hpp"
+#include "pq_cuvslam/impl/image_stats.hpp"
 #include "pq_cuvslam/impl/landmarks_vis_helper.hpp"
 #include "pq_cuvslam/impl/latency_emulator.hpp"
 #include "pq_cuvslam/impl/limited_vector.hpp"
@@ -157,11 +158,14 @@ struct VisualSlamNode::VisualSlamImpl
   // Check and handle the localization future status
   void CheckLocalizationStatus();
 
-  // Add one processed frame to the run output.
-  void AddRunOutputFrame(
+  // Outputs of one processed frame: events, frame diagnostics topic, run output.
+  void ReportFrame(
     int64_t timestamp_ns, bool tracked, const std::optional<tf2::Transform> & odom_pose,
     const std::optional<tf2::Transform> & slam_pose, double track_time_ms,
-    double callback_time_ms);
+    double callback_time_ms, const std::vector<std::pair<int, ImageType>> & images);
+
+  // Publishes an event, logs it and adds it to the run output.
+  void PublishEvent(uint8_t type, int64_t stamp_ns, const std::string & description);
 
   // Write the run output (see RunOutput) if enabled and not written yet.
   void WriteRunOutput();
@@ -191,6 +195,12 @@ struct VisualSlamNode::VisualSlamImpl
   } sync_stats;
   // Capture offset of the rig frames, by reference stamp, for the run output.
   std::map<int64_t, double> frame_sync_offset_ms;
+
+  // Diagnostics: name and topic of every input image (camera names of the profile, or
+  // camera_<i>; "depth"), state for the events.
+  std::map<int, std::pair<std::string, std::string>> input_image_names;
+  bool last_frame_tracked = true;
+  bool last_loop_closure = false;
 
   // Sequencer used to sequence imu and image messages.
   using Sequencer = MessageStreamSequencer<ImuType::ConstSharedPtr,

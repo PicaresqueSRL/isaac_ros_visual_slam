@@ -37,6 +37,7 @@ reserved.
   <depend>libopencv-dev</depend>
   <depend>isaac_ros_visual_slam_interfaces</depend>
   <depend>nav_msgs</depend>
+  <depend>pq_cuvslam_interfaces</depend>
   <depend>ament_index_cpp</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_components</depend>

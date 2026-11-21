@@ -41,6 +41,7 @@ tools/benchmark_docker.sh -o ~/bench -- compare /out/v15 /out/v17 --out /out/v15
 | `gyro_rms_deg`, `gyro_median_deg`, `gyro_p95_deg` | rotation error per frame against the gyroscope of the base camera (no ground truth needed; includes the small gyroscope bias, the same for all runs of a bag) |
 | `gyro_glitches` | frames with a rotation error above 2 deg |
 | `track_ms_median`, `replay_wall_s` | median `Track()` time, wall time of the replay |
+| `saturated_pct` | highest median share of saturated pixels among the input images (diagnostics of the node) |
 | `deterministic` | with `--repeat N`: the N runs give identical trajectories |
 | `gt_rmse_m` | with `--gt-root` and `--compare-runs`: rigid RMSE against the ground truth (an indication only: the ground truth is approximate) |
 

@@ -351,6 +351,11 @@ private:
   // If set, the run output (CSV files and run_info.json) is written to this folder.
   std::string run_output_dir_;
 
+  // Diagnostics: per-frame topic visual_slam/diagnostics/frame (when it has subscribers) and
+  // statistics of the input images computed on one pixel every diagnostics_pixel_stride_.
+  bool enable_frame_diagnostics_;
+  int diagnostics_pixel_stride_;
+
   // Emulation of the processing time of another platform (e.g. Jetson on a PC): each frame
   // takes at least the time given by latency_profile_ (status.csv measured on that platform)
   // or emulated_latency_ms_. See impl/latency_emulator.hpp.
@@ -382,6 +387,8 @@ private:
   rclcpp::Publisher<PathType>::SharedPtr tracking_vo_path_pub_;
   rclcpp::Publisher<PathType>::SharedPtr tracking_slam_path_pub_;
   rclcpp::Publisher<DiagnosticArrayType>::SharedPtr diagnostics_pub_;
+  rclcpp::Publisher<FrameDiagnosticsType>::SharedPtr frame_diagnostics_pub_;
+  rclcpp::Publisher<SlamEventType>::SharedPtr events_pub_;
 
   // Sends a message to global localization to generate a pose hint
   rclcpp::Publisher<PoseWithCovarianceStampedType>::SharedPtr trigger_hint_pub_;

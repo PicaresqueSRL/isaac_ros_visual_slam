@@ -72,6 +72,7 @@ WORKDIR /ws
 COPY pq_cuvslam/package.xml src/isaac_ros_visual_slam/pq_cuvslam/package.xml
 COPY isaac_ros_visual_slam_interfaces/package.xml \
      src/isaac_ros_visual_slam/isaac_ros_visual_slam_interfaces/package.xml
+COPY pq_cuvslam_interfaces/package.xml src/isaac_ros_visual_slam/pq_cuvslam_interfaces/package.xml
 # The upstream rosdep database has no Lyrical entries for Ubuntu 24.04 (noble),
 # and the Isaac ROS buildfarm does not provide a rosdep source. Keys are resolved
 # as for Ubuntu 26.04 (resolute), the reference platform of Lyrical: the apt

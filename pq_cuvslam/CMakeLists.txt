@@ -207,6 +207,7 @@ ament_auto_add_library(
   src/visual_slam_node.cpp
   src/impl/cuvslam_compat.cpp
   src/impl/cuvslam_ros_conversion.cpp
+  src/impl/image_stats.cpp
   src/impl/landmarks_vis_helper.cpp
   src/impl/latency_emulator.cpp
   src/impl/localizer_vis_helper.cpp
@@ -296,6 +297,8 @@ if(BUILD_TESTING)
   target_include_directories(${PROJECT_NAME}_test_device_frame_synchronizer PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
+  ament_add_gtest(${PROJECT_NAME}_test_image_stats test/test_image_stats.cpp)
+  target_link_libraries(${PROJECT_NAME}_test_image_stats visual_slam_node)
   ament_add_gtest(${PROJECT_NAME}_test_motion_compensation test/test_motion_compensation.cpp)
   target_link_libraries(${PROJECT_NAME}_test_motion_compensation visual_slam_node)
 
