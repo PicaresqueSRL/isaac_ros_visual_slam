@@ -295,6 +295,12 @@ This file records every change made to it. Update it with each change.
 - Real-time replays (cam2 VIO): no effect on clean bags; start-end distance 43.3 -> 7.0 m
   (staircases_102) and 45.6 -> 2.9 m (elevator_down_107).
 
+**Tracker reset** (`d3ba685`)
+- After `health_reset_bad_frames` (8) rejected or lost frames within 1 s, at most every 2 s, the
+  trackers are recreated with the same rig and configuration; the guarded odometry continues.
+  Event `tracker_reset`. No effect on clean bags; helps when the VIO diverges and the images are
+  good again (elevator_down_107 2.85 -> 1.53 m); no gain on saturated images.
+
 ## Notes
 
 - Frames processed: only complete stereo pairs reach the tracker (e.g. `loop_closure`: 826
