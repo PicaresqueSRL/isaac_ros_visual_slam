@@ -15,9 +15,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 """
-MCAP for Rerun from a SLAM recording of record_slam.sh, with the camera images of the source
-bag, all on the sensor time (header stamps), so that the trajectory and the images play
-together.
+MCAP for Rerun from a SLAM recording of record_slam.sh (or a run output folder with the CSV
+files, e.g. of a live run), with the camera images of the source bag, all on the sensor time
+(header stamps), so that the trajectory and the images play together.
 
 Rerun reads PoseStamped, PointCloud2, TFMessage and CompressedImage from MCAP, not Odometry or
 Path. Converted:
@@ -36,6 +36,7 @@ Usage:
 """
 
 import argparse
+import csv
 import importlib.util
 import os
 
@@ -47,6 +48,7 @@ import rosbag2_py
 from rosidl_runtime_py.utilities import get_message
 from sensor_msgs.msg import CompressedImage, Image
 from sensor_msgs_py.point_cloud2 import create_cloud_xyz32
+from std_msgs.msg import Header
 
 _spec = importlib.util.spec_from_file_location(
     'scale_recording', os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -80,40 +82,13 @@ def to_bgr(img):
     return None
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('recording')
-    ap.add_argument('source')
-    ap.add_argument('out')
-    ap.add_argument('--images', default='/cam2/color/image_raw,/cam1/color/image_raw')
-    ap.add_argument('--scale', type=float, default=1.0)
-    ap.add_argument('--jpeg-quality', type=int, default=80)
-    ap.add_argument('--max-image-rate', type=float, default=15.0,
-                    help='images per second and topic at most (0: all)')
-    args = ap.parse_args()
-    if os.path.exists(args.out):
-        raise SystemExit(f'{args.out} exists')
-
-    writer = rosbag2_py.SequentialWriter()
-    writer.open(rosbag2_py.StorageOptions(uri=args.out, storage_id='mcap'),
-                rosbag2_py.ConverterOptions('cdr', 'cdr'))
-    created = {}
-
-    def write(topic, type_, msg, t):
-        if topic not in created:
-            writer.create_topic(sr.topic_metadata(len(created), topic, type_))
-            created[topic] = 0
-        created[topic] += 1
-        writer.write(topic, serialize_message(msg), t)
-
-    # SLAM recording.
-    reader = open_reader(args.recording)
+def write_recording(path, write, s):
+    """SLAM topics of a recording of record_slam.sh. Returns the first odometry stamp (ns)."""
+    reader = open_reader(path)
     types = {t.name: t.type for t in reader.get_all_topics_and_types()}
     classes = {}
     trail = []
     first_odom = None
-    s = args.scale
     while reader.has_next():
         topic, data, t_rec = reader.read_next()
         type_ = types[topic]
@@ -157,6 +132,75 @@ def main():
             sr.scale_position(msg.pose.position, s)
             write(topic, type_, msg, t)
     del reader
+    return first_odom
+
+
+def write_run_folder(path, write, s):
+    """Trajectories of a run output folder: odometry.csv (pose and trail of the base frame) and
+    slam_poses.csv (final SLAM path, written at the end). Returns the first odometry stamp (ns)."""
+    first_odom, t, header = None, 0, None
+    trail = []
+    with open(os.path.join(path, 'odometry.csv')) as f:
+        rows = list(csv.DictReader(f))
+    for r in rows:
+        t = int(round(float(r['timestamp']) * 1e9))
+        first_odom = t if first_odom is None else first_odom
+        header = Header()
+        header.stamp.sec, header.stamp.nanosec = t // 1_000_000_000, t % 1_000_000_000
+        header.frame_id = 'odom'
+        pose = PoseStamped()
+        pose.header = header
+        pose.pose.position.x, pose.pose.position.y, pose.pose.position.z = (
+            float(r[k]) * s for k in 'xyz')
+        o = pose.pose.orientation
+        o.x, o.y, o.z, o.w = (float(r[k]) for k in ('qx', 'qy', 'qz', 'qw'))
+        write('/rerun/odometry/pose', 'geometry_msgs/msg/PoseStamped', pose, t)
+        trail.append((pose.pose.position.x, pose.pose.position.y, pose.pose.position.z))
+        write('/rerun/odometry/trail', 'sensor_msgs/msg/PointCloud2',
+              create_cloud_xyz32(header, trail), t)
+    slam = os.path.join(path, 'slam_poses.csv')
+    if header is not None and os.path.isfile(slam):
+        with open(slam) as f:
+            pts = [tuple(float(r[k]) * s for k in 'xyz') for r in csv.DictReader(f)]
+        if pts:
+            header.frame_id = 'map'
+            write('/rerun/slam_path', 'sensor_msgs/msg/PointCloud2',
+                  create_cloud_xyz32(header, pts), t)
+    return first_odom
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('recording', help='recording of record_slam.sh, or a run output folder '
+                    '(odometry.csv, slam_poses.csv), e.g. of a live run')
+    ap.add_argument('source')
+    ap.add_argument('out')
+    ap.add_argument('--images', default='/cam2/color/image_raw,/cam1/color/image_raw')
+    ap.add_argument('--scale', type=float, default=1.0)
+    ap.add_argument('--jpeg-quality', type=int, default=80)
+    ap.add_argument('--max-image-rate', type=float, default=15.0,
+                    help='images per second and topic at most (0: all)')
+    args = ap.parse_args()
+    if os.path.exists(args.out):
+        raise SystemExit(f'{args.out} exists')
+
+    writer = rosbag2_py.SequentialWriter()
+    writer.open(rosbag2_py.StorageOptions(uri=args.out, storage_id='mcap'),
+                rosbag2_py.ConverterOptions('cdr', 'cdr'))
+    created = {}
+
+    def write(topic, type_, msg, t):
+        if topic not in created:
+            writer.create_topic(sr.topic_metadata(len(created), topic, type_))
+            created[topic] = 0
+        created[topic] += 1
+        writer.write(topic, serialize_message(msg), t)
+
+    if os.path.isfile(os.path.join(args.recording, 'odometry.csv')):
+        first_odom = write_run_folder(args.recording, write, args.scale)
+    else:
+        first_odom = write_recording(args.recording, write, args.scale)
 
     # Images and static TF of the source bag.
     image_topics = [x for x in args.images.split(',') if x]
