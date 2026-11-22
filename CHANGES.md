@@ -25,6 +25,7 @@ This file records every change made to it. Update it with each change.
 | Latency emulation | none | `latency_profile` / `emulated_latency_ms`: frames take as long as on the target platform |
 | Diagnostics | `visual_slam/status`, `/diagnostics` | also `visual_slam/diagnostics/frame` (per-frame times, observations, stream saturation, valid depth) and `visual_slam/events` (`pq_cuvslam_interfaces`) |
 | IMU queue | SENSOR_DATA depth (5) | 400 messages (`imu_qos_depth`): no IMU samples lost in real time |
+| Odometry health | none | per-frame check (speed, rotation against the gyroscope, landmarks) and `visual_slam/tracking/odometry_guarded` without the rejected increments |
 | Run output | topics only | also CSV + `run_info.json` (`run_output_dir`), format of `run_output.py` |
 | Build | Isaac ROS container | `docker/Dockerfile` (ROS 2 Lyrical, Ubuntu 24.04, CUDA 13) |
 | Configuration | launch parameters + remappings + `static_transform_publisher` | YAML profiles (`profile`): cameras, topics, frames, IMU, depth, extrinsics with source, mode |
@@ -275,6 +276,24 @@ This file records every change made to it. Update it with each change.
   (frustum overlap check > 50 %, same resolution, pinhole for cuNLS). The check of cuVSLAM 17
   uses the inverse relative pose between the cameras (the bands are on the far sides). With
   the 15-22 % real overlap of our holder the Multisensor odometry is not reliable.
+
+### 2026-11-22
+
+**Live chain on the Jetson; cam1 VIO profile** (`59ae15c`, `b0619ee`)
+- First live session (scripts on the Jetson, outside the repo): emitter off, IR 848x480 and RGB
+  640x480 at 30 fps, Fast DDS LARGE_DATA between containers, MCAP zstd recording. Live SLAM at
+  30 fps, `track()` 7.5 ms. New profile `cam1_stereo_imu`: on the first walk the down-looking
+  cam1 gave 0.17 deg and 0.8 m loop error on 31 m, cam2 0.7 deg and 2.3-2.9 m (cam2 diverged
+  facing a white wall with a lamp and the ceiling). `tools/to_rerun.py` also takes a run output
+  folder (CSV of a live run).
+
+**Odometry health check and guarded odometry** (`5f5410c`)
+- `impl/tracking_health`: per frame, causal: speed of the increment, rotation against the
+  gyroscope of the base camera, landmarks. Rejected or lost frames keep the position and apply
+  the gyroscope rotation. `visual_slam/tracking/odometry_guarded`, health in the frame
+  diagnostics, events `pose_rejected` / `pose_accepted`, `health.csv`, `odometry_guarded.csv`.
+- Real-time replays (cam2 VIO): no effect on clean bags; start-end distance 43.3 -> 7.0 m
+  (staircases_102) and 45.6 -> 2.9 m (elevator_down_107).
 
 ## Notes
 
