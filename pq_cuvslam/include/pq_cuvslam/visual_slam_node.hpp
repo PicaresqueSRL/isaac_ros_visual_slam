@@ -378,6 +378,11 @@ private:
   // Diagnostics: per-frame topic visual_slam/diagnostics/frame (when it has subscribers) and
   // statistics of the input images computed on one pixel every diagnostics_pixel_stride_.
   bool enable_frame_diagnostics_;
+
+  // Health check of the odometry and guarded odometry (impl/tracking_health.hpp).
+  double health_max_speed_mps_;
+  double health_max_gyro_error_deg_;
+  int health_min_landmarks_;
   int diagnostics_pixel_stride_;
 
   // Emulation of the processing time of another platform (e.g. Jetson on a PC): each frame
@@ -408,6 +413,7 @@ private:
   rclcpp::Publisher<PoseWithCovarianceStampedType>::SharedPtr
     tracking_vo_pose_covariance_pub_;
   rclcpp::Publisher<OdometryType>::SharedPtr tracking_odometry_pub_;
+  rclcpp::Publisher<OdometryType>::SharedPtr tracking_odometry_guarded_pub_;
   rclcpp::Publisher<PathType>::SharedPtr tracking_vo_path_pub_;
   rclcpp::Publisher<PathType>::SharedPtr tracking_slam_path_pub_;
   rclcpp::Publisher<DiagnosticArrayType>::SharedPtr diagnostics_pub_;

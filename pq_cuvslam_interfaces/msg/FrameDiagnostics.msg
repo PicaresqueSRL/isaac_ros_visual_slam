@@ -21,4 +21,11 @@ uint32 landmarks         # landmarks of the last frame
 bool loop_closure        # loop closure detected in this frame
 bool pose_graph_optimized
 
+# Health check of the odometry (impl/tracking_health.hpp): 0 ok, 1 degraded (few landmarks),
+# 2 rejected (implausible speed or rotation against the gyroscope), 3 lost.
+uint8 health
+string health_reasons    # e.g. speed+gyro
+float32 speed_mps        # speed of the odometry increment; NaN without increment
+float32 gyro_error_deg   # rotation of the increment against the gyroscope; NaN without gyroscope
+
 StreamStats[] streams    # one per input image of the frame

@@ -184,6 +184,9 @@ void VisualSlamNode::DeclareAndReadParameters()
   // Wrapper parameters:
   run_output_dir_ = Param<std::string>("run_output_dir", "");
   enable_frame_diagnostics_ = Param<bool>("enable_frame_diagnostics", true);
+  health_max_speed_mps_ = Param<double>("health_max_speed_mps", 3.0);
+  health_max_gyro_error_deg_ = Param<double>("health_max_gyro_error_deg", 5.0);
+  health_min_landmarks_ = Param<int>("health_min_landmarks", 10);
   diagnostics_pixel_stride_ = Param<int>("diagnostics_pixel_stride", 4);
   {
     rcl_interfaces::msg::ParameterDescriptor descriptor;
@@ -392,6 +395,8 @@ void VisualSlamNode::CreateInterfaces()
     "visual_slam/tracking/vo_pose_covariance", default_qos);
   tracking_odometry_pub_ =
     create_publisher<OdometryType>("visual_slam/tracking/odometry", default_qos);
+  tracking_odometry_guarded_pub_ =
+    create_publisher<OdometryType>("visual_slam/tracking/odometry_guarded", default_qos);
   tracking_vo_path_pub_ = create_publisher<PathType>("visual_slam/tracking/vo_path", default_qos);
   tracking_slam_path_pub_ =
     create_publisher<PathType>("visual_slam/tracking/slam_path", default_qos);
@@ -476,6 +481,7 @@ void VisualSlamNode::DestroyInterfaces()
   tracking_vo_pose_pub_.reset();
   tracking_vo_pose_covariance_pub_.reset();
   tracking_odometry_pub_.reset();
+  tracking_odometry_guarded_pub_.reset();
   tracking_vo_path_pub_.reset();
   tracking_slam_path_pub_.reset();
   diagnostics_pub_.reset();

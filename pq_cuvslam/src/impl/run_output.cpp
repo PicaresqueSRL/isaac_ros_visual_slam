@@ -330,6 +330,25 @@ void RunOutput::AddEvent(
   ++event_counts_[type];
 }
 
+void RunOutput::AddHealth(int64_t timestamp_ns, const HealthOutput & h)
+{
+  const auto num = [](double v) {
+      return std::isfinite(v) ? FormatDouble(std::round(v * 1000.0) / 1000.0) : std::string("nan");
+    };
+  health_.push_back({FormatDouble(timestamp_ns / 1e9), HealthStateName(h.state),
+      HealthReasons(h.reasons), num(h.speed_mps), num(h.gyro_error_deg)});
+  ++health_counts_[HealthStateName(h.state)];
+  if (h.guarded_pose) {
+    if (!guarded_ref_) {
+      guarded_ref_ = h.guarded_pose->inverse();
+    }
+    const tf2::Transform rel = *guarded_ref_ * *h.guarded_pose;
+    odometry_guarded_.push_back(PoseRow(timestamp_ns, rel));
+    guarded_positions_.push_back(rel.getOrigin());
+    guarded_stamps_.push_back(timestamp_ns);
+  }
+}
+
 bool RunOutput::Write(const cuvslam::Slam * slam, JsonObject info)
 {
   namespace fs = std::filesystem;
@@ -454,6 +473,20 @@ bool RunOutput::Write(const cuvslam::Slam * slam, JsonObject info)
       streams.Add(name, s);
     }
     summary.Add("streams", streams);
+  }
+  if (!health_.empty()) {
+    ok &= WriteCsv(
+      dir / "health.csv", {"timestamp", "state", "reasons", "speed_mps", "gyro_error_deg"},
+      health_);
+    files.push_back("health.csv");
+    ok &= WriteCsv(dir / "odometry_guarded.csv", kPoseHeader, odometry_guarded_);
+    files.push_back("odometry_guarded.csv");
+    JsonObject health;
+    for (const auto & [state, count] : health_counts_) {
+      health.Add(state, count);
+    }
+    summary.Add("health", health);
+    summary.Add("odometry_guarded", PathStats(guarded_stamps_, guarded_positions_));
   }
   ok &= WriteCsv(dir / "events.csv", {"timestamp", "type", "description"}, events_);
   files.push_back("events.csv");

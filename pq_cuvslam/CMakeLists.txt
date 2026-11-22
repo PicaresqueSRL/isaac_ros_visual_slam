@@ -213,6 +213,7 @@ ament_auto_add_library(
   src/impl/localizer_vis_helper.cpp
   src/impl/motion_compensation.cpp
   src/impl/virtual_camera.cpp
+  src/impl/tracking_health.cpp
   src/impl/pose_cache.cpp
   src/impl/profile.cpp
   src/impl/posegraph_vis_helper.cpp
@@ -301,6 +302,8 @@ if(BUILD_TESTING)
   )
   ament_add_gtest(${PROJECT_NAME}_test_image_stats test/test_image_stats.cpp)
   target_link_libraries(${PROJECT_NAME}_test_image_stats visual_slam_node)
+  ament_add_gtest(${PROJECT_NAME}_test_tracking_health test/test_tracking_health.cpp)
+  target_link_libraries(${PROJECT_NAME}_test_tracking_health visual_slam_node)
   ament_add_gtest(${PROJECT_NAME}_test_virtual_camera test/test_virtual_camera.cpp)
   target_link_libraries(${PROJECT_NAME}_test_virtual_camera visual_slam_node)
   ament_add_gtest(${PROJECT_NAME}_test_motion_compensation test/test_motion_compensation.cpp)

@@ -35,6 +35,9 @@ Benchmark and analysis tools: `../tools/`.
 | `diagnostics_pixel_stride` | `4` | image statistics on one pixel every N in both directions |
 | `imu_qos_depth` | `400` (Isaac ROS: 0, i.e. the SENSOR_DATA depth 5) | IMU subscription queue; a short queue loses IMU samples when a frame is slow, and the real-time VIO diverges on the Orin Nano |
 | `multisensor_use_imu` | `true` | Multisensor mode: fuse the IMU |
+| `health_max_speed_mps` | `3.0` | odometry increments faster than this are rejected (guarded odometry) |
+| `health_max_gyro_error_deg` | `5.0` | increments whose rotation differs from the gyroscope by more are rejected |
+| `health_min_landmarks` | `10` | fewer landmarks: health degraded |
 
 ## Topics
 
@@ -43,11 +46,12 @@ The Isaac ROS topics are unchanged (`visual_slam/tracking/odometry`, `vo_path`, 
 
 | Topic | Type | Content |
 |---|---|---|
-| `visual_slam/diagnostics/frame` | `pq_cuvslam_interfaces/FrameDiagnostics` | per frame: mode, profile, tracked, Track() and callback time, latency (live), sync offset, observations per camera, landmarks, loop closure, statistics of every input image (`StreamStats`: brightness, saturated and dark pixels, valid depth) |
-| `visual_slam/events` | `pq_cuvslam_interfaces/SlamEvent` | configured, tracker initialized, tracking lost / recovered, loop closure (reliable, transient local) |
+| `visual_slam/diagnostics/frame` | `pq_cuvslam_interfaces/FrameDiagnostics` | per frame: mode, profile, tracked, Track() and callback time, latency (live), sync offset, observations per camera, landmarks, loop closure, statistics of every input image (`StreamStats`: brightness, saturated and dark pixels, valid depth), health of the odometry (ok, degraded, rejected, lost; speed, rotation error against the gyroscope) |
+| `visual_slam/tracking/odometry_guarded` | `nav_msgs/Odometry` | odometry with the rejected increments removed: for a rejected or lost frame the position is kept and the rotation of the gyroscope applied (no jump is carried into the trajectory) |
+| `visual_slam/events` | `pq_cuvslam_interfaces/SlamEvent` | configured, tracker initialized, tracking lost / recovered, loop closure, odometry rejected / accepted again (reliable, transient local) |
 
 With `run_output_dir` the same information is written to `status.csv`, `streams.csv`,
-`events.csv` and summarized in `run_info.json`.
+`events.csv`, `health.csv`, `odometry_guarded.csv` and summarized in `run_info.json`.
 
 Note: on fully saturated images cuVSLAM can report a successful tracking with no landmarks;
 the saturation of the streams is the signal to watch.

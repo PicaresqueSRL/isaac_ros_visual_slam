@@ -41,6 +41,7 @@
 #include "pq_cuvslam/impl/cuvslam_compat.hpp"
 #include "pq_cuvslam/impl/device_frame_synchronizer.hpp"
 #include "pq_cuvslam/impl/image_stats.hpp"
+#include "pq_cuvslam/impl/tracking_health.hpp"
 #include "pq_cuvslam/impl/virtual_camera.hpp"
 #include "pq_cuvslam/impl/landmarks_vis_helper.hpp"
 #include "pq_cuvslam/impl/latency_emulator.hpp"
@@ -163,7 +164,8 @@ struct VisualSlamNode::VisualSlamImpl
   void ReportFrame(
     int64_t timestamp_ns, bool tracked, const std::optional<tf2::Transform> & odom_pose,
     const std::optional<tf2::Transform> & slam_pose, double track_time_ms,
-    double callback_time_ms, const std::vector<std::pair<int, ImageType>> & images);
+    double callback_time_ms, const std::vector<std::pair<int, ImageType>> & images,
+    const HealthOutput & health);
 
   // Publishes an event, logs it and adds it to the run output.
   void PublishEvent(uint8_t type, int64_t stamp_ns, const std::string & description);
@@ -184,6 +186,16 @@ struct VisualSlamNode::VisualSlamImpl
   std::vector<int64_t> device_clock_offset_ns;  // per device
   std::vector<int> camera_device;               // device index per camera
   std::vector<GyroBuffer> device_gyro;          // per device, corrected stamps
+
+  // Health check of the odometry: gyroscope of the base camera (VIO IMU, or the reference
+  // device of the sync), its rotation to the base frame, state of the previous frame.
+  TrackingHealth health;
+  GyroBuffer health_gyro;
+  Eigen::Matrix3d health_R_base_gyro = Eigen::Matrix3d::Identity();
+  bool health_gyro_ready = false;
+  int64_t health_last_stamp_ns = 0;
+  HealthState health_last_state = HealthState::OK;
+  int health_rejected_run = 0;
   std::vector<Eigen::Matrix3d> camera_K;        // per camera, set at initialization
   std::vector<Eigen::Matrix3d> camera_R_imu;    // per camera: rotation imu -> optical frame
   bool compensation_ready = false;

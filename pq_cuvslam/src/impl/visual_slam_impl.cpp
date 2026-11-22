@@ -16,6 +16,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <cstdio>
 #include <chrono>
 #include <thread>
 #include <memory>
@@ -205,6 +206,12 @@ VisualSlamNode::VisualSlamImpl::VisualSlamImpl(VisualSlamNode & vslam_node)
     }
     input_image_names[idx] = {name, topic};
   }
+
+  HealthConfig health_config;
+  health_config.max_speed_mps = node.health_max_speed_mps_;
+  health_config.max_gyro_error_deg = node.health_max_gyro_error_deg_;
+  health_config.min_landmarks = node.health_min_landmarks_;
+  health = TrackingHealth(health_config);
 
   // Device synchronization from the profile (two or more devices, multicamera or multisensor
   // mode without depth).
@@ -500,6 +507,35 @@ void VisualSlamNode::VisualSlamImpl::Initialize()
       }
     }
     compensation_ready = true;
+  }
+
+  // Gyroscope of the base camera for the health check of the odometry.
+  {
+    std::string gyro_frame;
+    const bool sync_gyro = device_sync && node.profile_ && node.profile_->sync &&
+      !node.profile_->sync->devices.empty();
+    if (node.UsesImu()) {
+      gyro_frame = !node.imu_frame_.empty() ? node.imu_frame_ :
+        initial_imu_message.value()->header.frame_id;
+    } else if (sync_gyro) {
+      gyro_frame = node.profile_->sync->devices[0].imu_frame;
+    }
+    health_gyro_ready = false;
+    if (!gyro_frame.empty() && tf_buffer->canTransform(base_frame, gyro_frame,
+          tf2::TimePointZero))
+    {
+      const tf2::Matrix3x3 R = GetLatestTransform(base_frame, gyro_frame).getBasis();
+      for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 3; ++c) {
+          health_R_base_gyro(r, c) = R[r][c];
+        }
+      }
+      health_gyro_ready = true;
+    }
+    RCLCPP_INFO(
+      node.get_logger(), "Odometry health check: max %.1f m/s, max %.1f deg against the gyroscope "
+      "(%s), min %d landmarks", node.health_max_speed_mps_, node.health_max_gyro_error_deg_,
+      health_gyro_ready ? gyro_frame.c_str() : "no gyroscope", node.health_min_landmarks_);
   }
 
   // Create the IMU configuration. If the IMU is disabled we just use the identity transform.
@@ -956,6 +992,9 @@ void VisualSlamNode::VisualSlamImpl::CallbackSyncImu(
   const auto & w = msg->angular_velocity;
   device_gyro[device].Add(
     t.nanoseconds() - device_clock_offset_ns[device], Eigen::Vector3d(w.x, w.y, w.z));
+  if (device == 0 && !node.UsesImu()) {
+    health_gyro.Add(t.nanoseconds(), Eigen::Vector3d(w.x, w.y, w.z));
+  }
 }
 
 void VisualSlamNode::VisualSlamImpl::OnRigFrame(const DeviceSync::RigFrame & frame)
@@ -1083,6 +1122,8 @@ void VisualSlamNode::VisualSlamImpl::UpdatePose(
     int64_t imu_ts = static_cast<int64_t>(timestamp.nanoseconds());
     RCLCPP_DEBUG(node.get_logger(), "Using imu msg timestamp [%ld]", imu_ts);
     const auto imu_measurement = TocuVSLAMImuMeasurement(imu_msg, imu_ts);
+    const auto & w = imu_msg->angular_velocity;
+    health_gyro.Add(imu_ts, Eigen::Vector3d(w.x, w.y, w.z));
     try {
       cuvslam_odometry->RegisterImuMeasurement(0, imu_measurement);
     } catch (const std::exception & e) {
@@ -1393,11 +1434,38 @@ void VisualSlamNode::VisualSlamImpl::UpdatePose(
   if (values.size()) {
     track_execution_time_mean /= values.size();
   }
+  // Health check of the odometry and guarded odometry.
+  HealthInput health_in;
+  health_in.stamp_ns = latest_ts;
+  health_in.pose = output_odom_pose;
+  if (vo_success && (node.enable_landmarks_view_ || node.enable_localization_n_mapping_)) {
+    try {
+      health_in.landmarks = cuvslam_odometry->GetLastLandmarks().size();
+    } catch (const std::exception &) {
+    }
+  }
+  if (health_gyro_ready && health_last_stamp_ns > 0) {
+    if (const auto dR = health_gyro.Integrate(health_last_stamp_ns, latest_ts)) {
+      const Eigen::Quaterniond q(health_R_base_gyro * *dR * health_R_base_gyro.transpose());
+      health_in.gyro_rotation = tf2::Quaternion(q.x(), q.y(), q.z(), q.w());
+    }
+  }
+  health_last_stamp_ns = latest_ts;
+  const HealthOutput health_out = health.Update(health_in);
+  if (health_out.guarded_pose && HasSubscribers(node.tracking_odometry_guarded_pub_)) {
+    OdometryType odom;
+    odom.header.stamp = timestamp_output;
+    odom.header.frame_id = node.odom_frame_;
+    odom.child_frame_id = node.base_frame_;
+    tf2::toMsg(*health_out.guarded_pose, odom.pose.pose);
+    node.tracking_odometry_guarded_pub_->publish(odom);
+  }
+
   ReportFrame(latest_ts, vo_success, output_odom_pose, output_slam_pose,
     track_execution_time * 1000.0,
     std::chrono::duration<double, std::milli>(
       std::chrono::steady_clock::now() - callback_start).count(),
-    idx_and_image_msgs);
+    idx_and_image_msgs, health_out);
 
   // Publish status.
   std_msgs::msg::Header header;
@@ -1670,7 +1738,9 @@ void VisualSlamNode::VisualSlamImpl::PublishEvent(
     {SlamEventType::TRACKING_RECOVERED, "tracking_recovered"},
     {SlamEventType::LOOP_CLOSURE, "loop_closure"},
     {SlamEventType::CONFIGURED, "configured"},
-    {SlamEventType::TRACKER_INITIALIZED, "tracker_initialized"}};
+    {SlamEventType::TRACKER_INITIALIZED, "tracker_initialized"},
+    {SlamEventType::POSE_REJECTED, "pose_rejected"},
+    {SlamEventType::POSE_ACCEPTED, "pose_accepted"}};
   const auto name_it = kNames.find(type);
   const std::string name = name_it != kNames.end() ? name_it->second : std::to_string(type);
   if (node.events_pub_) {
@@ -1694,7 +1764,8 @@ void VisualSlamNode::VisualSlamImpl::PublishEvent(
 void VisualSlamNode::VisualSlamImpl::ReportFrame(
   int64_t timestamp_ns, bool tracked, const std::optional<tf2::Transform> & odom_pose,
   const std::optional<tf2::Transform> & slam_pose, double track_time_ms,
-  double callback_time_ms, const std::vector<std::pair<int, ImageType>> & images)
+  double callback_time_ms, const std::vector<std::pair<int, ImageType>> & images,
+  const HealthOutput & health_out)
 {
   const bool publish_diagnostics = node.enable_frame_diagnostics_ &&
     HasSubscribers(node.frame_diagnostics_pub_);
@@ -1757,6 +1828,25 @@ void VisualSlamNode::VisualSlamImpl::ReportFrame(
       "loop closure, " + std::to_string(metrics->lc_good_landmarks_count) + " landmarks");
   }
   last_loop_closure = loop_closure;
+  if (health_out.state == HealthState::REJECTED) {
+    if (health_last_state != HealthState::REJECTED) {
+      char text[128];
+      std::snprintf(
+        text, sizeof(text), "odometry increment rejected (%s, %.1f m/s, %.1f deg)",
+        HealthReasons(health_out.reasons).c_str(), health_out.speed_mps,
+        health_out.gyro_error_deg);
+      PublishEvent(SlamEventType::POSE_REJECTED, timestamp_ns, text);
+    }
+    ++health_rejected_run;
+  } else if (health_last_state == HealthState::REJECTED && health_out.state != HealthState::LOST) {
+    PublishEvent(
+      SlamEventType::POSE_ACCEPTED, timestamp_ns,
+      "odometry accepted again after " + std::to_string(health_rejected_run) + " rejected frames");
+    health_rejected_run = 0;
+  }
+  if (health_out.state != HealthState::LOST) {
+    health_last_state = health_out.state;
+  }
 
   // Statistics of the input images.
   std::vector<std::pair<int, ImageStats>> stats;
@@ -1794,6 +1884,10 @@ void VisualSlamNode::VisualSlamImpl::ReportFrame(
     d.landmarks = static_cast<uint32_t>(num_landmarks);
     d.loop_closure = loop_closure;
     d.pose_graph_optimized = metrics && metrics->pgo_status;
+    d.health = static_cast<uint8_t>(health_out.state);
+    d.health_reasons = HealthReasons(health_out.reasons);
+    d.speed_mps = static_cast<float>(health_out.speed_mps);
+    d.gyro_error_deg = static_cast<float>(health_out.gyro_error_deg);
     for (const auto & [idx, st] : stats) {
       StreamStatsType ss;
       ss.name = input_image_names[idx].first;
@@ -1821,6 +1915,7 @@ void VisualSlamNode::VisualSlamImpl::ReportFrame(
     for (const auto & [idx, st] : stats) {
       run_output->AddStreamStats(timestamp_ns, input_image_names[idx].first, st);
     }
+    run_output->AddHealth(timestamp_ns, health_out);
   }
 }
 

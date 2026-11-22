@@ -31,6 +31,7 @@
 
 #include "cuvslam/cuvslam2.h"
 #include "pq_cuvslam/impl/image_stats.hpp"
+#include "pq_cuvslam/impl/tracking_health.hpp"
 #include "tf2/LinearMath/Transform.hpp"
 
 namespace pq
@@ -75,6 +76,8 @@ private:
 //   streams.csv        per frame and input image: brightness, saturated and dark pixels,
 //                      valid depth (see image_stats.hpp)
 //   events.csv         events: tracking lost / recovered, loop closures, ...
+//   health.csv         per frame: health state, reasons, speed, rotation error against the gyro
+//   odometry_guarded.csv  guarded odometry (rejected increments removed), as odometry.csv
 //   run_info.json      input, parameters, versions, frame counts and summary metrics
 //
 // Pose columns: timestamp,x,y,z,qx,qy,qz,qw,roll_deg,pitch_deg,yaw_deg. Timestamps in seconds.
@@ -103,6 +106,7 @@ public:
 
   void AddStreamStats(int64_t timestamp_ns, const std::string & stream, const ImageStats & stats);
   void AddEvent(int64_t timestamp_ns, const std::string & type, const std::string & description);
+  void AddHealth(int64_t timestamp_ns, const HealthOutput & health);
 
   // Writes all files. slam may be null (SLAM disabled). info is extended with the summary
   // and the list of files. Returns false if the folder cannot be written.
@@ -127,6 +131,12 @@ private:
   std::vector<Row> slam_metrics_;
   std::vector<Row> streams_;
   std::vector<Row> events_;
+  std::vector<Row> health_;
+  std::vector<Row> odometry_guarded_;
+  std::optional<tf2::Transform> guarded_ref_;
+  std::vector<tf2::Vector3> guarded_positions_;
+  std::vector<int64_t> guarded_stamps_;
+  std::map<std::string, uint64_t> health_counts_;
   // Per stream: saturated (or valid depth) percent of every frame, for the summary.
   std::map<std::string, std::vector<double>> stream_saturated_;
   std::map<std::string, std::vector<double>> stream_valid_depth_;
