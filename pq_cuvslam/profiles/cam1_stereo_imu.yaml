@@ -1,0 +1,44 @@
+# cam1 (down-looking) IR stereo pair + cam1 IMU, visual-inertial odometry. cam1 sees the floor and
+# the lower part of the scene, which keeps texture when cam2 faces plain walls, ceilings or
+# lamps. First live walk indoors (22/11/2026, real-time replays on the Jetson): rotation error
+# 0.17 deg RMS and 0.8 m loop error on 31 m, against 0.7 deg and 2.3-2.9 m with cam2 (which
+# diverged where it faced a white wall with a lamp and the ceiling).
+name: cam1_stereo_imu
+description: cam1 (down) infrared stereo pair with the cam1 IMU, visual-inertial odometry
+mode: inertial
+base_frame: cam1_link
+
+# Order = cuVSLAM camera index; a stereo pair is left, right.
+cameras:
+  - name: cam1_ir1
+    image_topic: /cam1/infra1/image_rect_raw
+    camera_info_topic: /cam1/infra1/camera_info
+    optical_frame: cam1_infra1_optical_frame
+  - name: cam1_ir2
+    image_topic: /cam1/infra2/image_rect_raw
+    camera_info_topic: /cam1/infra2/camera_info
+    # The D455 camera_info of IR2 carries the IR1 frame: the frame is set here.
+    optical_frame: cam1_infra2_optical_frame
+
+imu:
+  topic: /cam1/imu
+  frame: cam1_gyro_optical_frame
+  noise:
+    gyro_noise_density: 0.000244      # rad/s/sqrt(Hz)
+    gyro_random_walk: 0.000019393     # rad/s^2/sqrt(Hz)
+    accel_noise_density: 0.001862     # m/s^2/sqrt(Hz)
+    accel_random_walk: 0.003          # m/s^3/sqrt(Hz)
+    frequency: 200.0                  # Hz
+    source: default                   # Isaac ROS defaults, not measured on our IMUs
+    date: null
+
+hardware:
+  ir_emitter: false
+
+parameters:
+  rectified_images: true
+  enable_image_denoising: false
+  image_jitter_threshold_ms: 150.0
+  enable_localization_n_mapping: true
+  enable_ground_constraint_in_odometry: false
+  enable_ground_constraint_in_slam: false

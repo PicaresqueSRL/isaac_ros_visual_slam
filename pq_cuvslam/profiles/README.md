@@ -19,6 +19,7 @@ remapping is needed. To change profile at runtime: `deactivate`, `cleanup`, set 
 | Profile | Mode | Streams | cuVSLAM |
 |---|---|---|---|
 | `cam2_stereo_imu` | inertial | cam2 IR1 + IR2, cam2 IMU | 15-17 (benchmark configuration) |
+| `cam1_stereo_imu` | inertial | cam1 IR1 + IR2, cam1 IMU (down-looking) | 15-17 |
 | `cam1_cam2_ir` | multicamera | cam2 IR1 + IR2, cam1 IR1 + IR2 | 15-17 |
 | `cam2_rgbd` | rgbd | cam2 RGB + aligned depth | 15-17 |
 | `cam2_rgb_mono` | mono | cam2 RGB | 15-17; trajectory without metric scale |
