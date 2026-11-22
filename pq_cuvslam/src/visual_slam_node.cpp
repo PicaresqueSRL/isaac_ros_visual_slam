@@ -69,10 +69,16 @@ VisualSlamNode::VisualSlamNode(const rclcpp::NodeOptions options)
         activate();
       });
   }
+  pre_shutdown_handle_ = get_node_base_interface()->get_context()->add_pre_shutdown_callback(
+    [this]() {
+      active_ = false;
+      WriteRunOutput();
+    });
 }
 
 VisualSlamNode::~VisualSlamNode()
 {
+  get_node_base_interface()->get_context()->remove_pre_shutdown_callback(pre_shutdown_handle_);
   active_ = false;
   TearDown();
 }

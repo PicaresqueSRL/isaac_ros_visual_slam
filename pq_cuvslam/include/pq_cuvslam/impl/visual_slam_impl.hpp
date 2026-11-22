@@ -293,6 +293,9 @@ struct VisualSlamNode::VisualSlamImpl
   // Store the localization future to prevent it from being destroyed before callback completes
   std::optional<boost::future<std::optional<PoseType>>> localization_future_;
   mutable std::mutex localization_mutex_;
+  // Frame processing and run output writing (the writing may come from a pre-shutdown
+  // callback, in another thread).
+  std::mutex frame_mutex_;
 
   // Run output (CSV files and run_info.json); null when run_output_dir is not set.
   std::unique_ptr<RunOutput> run_output;

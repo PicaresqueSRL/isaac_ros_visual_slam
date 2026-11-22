@@ -1127,6 +1127,10 @@ void VisualSlamNode::VisualSlamImpl::UpdatePose(
 {
   NvtxRangeScoped trace(
     "VisualSlamNode::VisualSlamImpl::UpdatePose", CLR_MAGENTA);
+  std::lock_guard<std::mutex> frame_lock(frame_mutex_);
+  if (run_output_written) {
+    return;   // shutting down: the run output is already written
+  }
   Stopwatch stopwatch;
   StopwatchScope ssw(stopwatch);
   const auto callback_start = std::chrono::steady_clock::now();
@@ -1970,6 +1974,7 @@ void VisualSlamNode::VisualSlamImpl::ReportFrame(
 
 void VisualSlamNode::VisualSlamImpl::WriteRunOutput()
 {
+  std::lock_guard<std::mutex> frame_lock(frame_mutex_);
   if (!run_output || run_output_written) {
     return;
   }

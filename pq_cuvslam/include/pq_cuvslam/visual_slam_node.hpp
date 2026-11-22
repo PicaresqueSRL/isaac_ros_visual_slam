@@ -160,6 +160,9 @@ private:
   // True in the active state: input is processed.
   std::atomic<bool> active_{false};
   rclcpp::TimerBase::SharedPtr autostart_timer_;
+  // Writes the run output when the context shuts down (SIGINT): with several nodes in one
+  // container the process may end before every node is destroyed.
+  rclcpp::PreShutdownCallbackHandle pre_shutdown_handle_;
 
   // Camera layout profile (parameter "profile"): name of an installed profile or path of a
   // YAML file. When set, it defines the cameras, topics, frames, extrinsics and mode, and the

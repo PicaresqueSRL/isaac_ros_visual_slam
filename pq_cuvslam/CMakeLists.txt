@@ -259,6 +259,14 @@ target_compile_definitions(visual_slam_node PUBLIC
 rclcpp_components_register_nodes(visual_slam_node "pq::visual_slam::VisualSlamNode")
 set(node_plugins "${node_plugins}pq::visual_slam::VisualSlamNode;$<TARGET_FILE:visual_slam_node>\n")
 
+# Odometry selector (two or more pq_cuvslam nodes, one per camera)
+ament_auto_add_library(
+  odometry_selector SHARED
+  src/impl/odometry_selector.cpp
+  src/odometry_selector_node.cpp
+)
+rclcpp_components_register_nodes(odometry_selector "pq::visual_slam::OdometrySelectorNode")
+
 # pq_cuvslam executable
 ament_auto_add_executable(${PROJECT_NAME}
   src/visual_slam_main.cpp
@@ -302,6 +310,8 @@ if(BUILD_TESTING)
   )
   ament_add_gtest(${PROJECT_NAME}_test_image_stats test/test_image_stats.cpp)
   target_link_libraries(${PROJECT_NAME}_test_image_stats visual_slam_node)
+  ament_add_gtest(${PROJECT_NAME}_test_odometry_selector test/test_odometry_selector.cpp)
+  target_link_libraries(${PROJECT_NAME}_test_odometry_selector odometry_selector)
   ament_add_gtest(${PROJECT_NAME}_test_tracking_health test/test_tracking_health.cpp)
   target_link_libraries(${PROJECT_NAME}_test_tracking_health visual_slam_node)
   ament_add_gtest(${PROJECT_NAME}_test_virtual_camera test/test_virtual_camera.cpp)
