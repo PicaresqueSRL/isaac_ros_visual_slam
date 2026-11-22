@@ -106,4 +106,29 @@ TEST(TrackingHealth, LostAndFewLandmarks)
   EXPECT_EQ(pq::visual_slam::HealthReasons(out.reasons), "few_landmarks");
 }
 
+TEST(TrackingHealth, ResetAfterRepeatedBadFrames)
+{
+  TrackingHealth h;   // reset after 8 bad frames within 1 s, at most every 2 s
+  h.Update(Frame(0, At(0.0)));
+  bool reset = false;
+  int i = 1;
+  for (; i < 30 && !reset; ++i) {
+    reset = h.Update(Frame(i, std::nullopt)).reset_tracker;
+  }
+  EXPECT_TRUE(reset);
+  EXPECT_EQ(i - 1, 8);
+  h.OnTrackerReset(1'000'000'000 + (i - 1) * kFrameNs);
+  // The new tracker starts again from the origin; the guarded pose continues.
+  auto out = h.Update(Frame(i, At(0.0)));
+  EXPECT_EQ(out.state, HealthState::OK);
+  out = h.Update(Frame(i + 1, At(0.05)));
+  EXPECT_NEAR(out.guarded_pose->getOrigin().x(), 0.05, 1e-9);
+  // Bad frames again right away: no second reset within 2 s.
+  bool again = false;
+  for (int k = i + 2; k < i + 20; ++k) {
+    again |= h.Update(Frame(k, std::nullopt)).reset_tracker;
+  }
+  EXPECT_FALSE(again);
+}
+
 }  // namespace

@@ -82,7 +82,7 @@ HealthOutput TrackingHealth::Update(const HealthInput & in)
     }
     out.guarded_pose = guarded_;
     out.consecutive_bad = ++consecutive_bad_;
-    return out;
+    return Finish(out, in.stamp_ns, true);
   }
 
   if (!last_raw_) {
@@ -92,7 +92,7 @@ HealthOutput TrackingHealth::Update(const HealthInput & in)
     guarded_ = guarded_ ? *guarded_ : *in.pose;
     out.guarded_pose = guarded_;
     consecutive_bad_ = 0;
-    return out;
+    return Finish(out, in.stamp_ns, false);
   }
 
   // Increment of the tracker since its last pose, in the base frame of that pose.
@@ -127,7 +127,33 @@ HealthOutput TrackingHealth::Update(const HealthInput & in)
     }
   }
   out.guarded_pose = guarded_;
+  return Finish(out, in.stamp_ns, out.state == HealthState::REJECTED);
+}
+
+HealthOutput TrackingHealth::Finish(HealthOutput out, int64_t stamp_ns, bool bad)
+{
+  const auto window_ns = static_cast<int64_t>(config_.reset_window_s * 1e9);
+  if (bad) {
+    bad_stamps_ns_.push_back(stamp_ns);
+  }
+  while (!bad_stamps_ns_.empty() && bad_stamps_ns_.front() < stamp_ns - window_ns) {
+    bad_stamps_ns_.pop_front();
+  }
+  out.bad_in_window = static_cast<int>(bad_stamps_ns_.size());
+  out.reset_tracker = config_.reset_bad_frames > 0 &&
+    out.bad_in_window >= config_.reset_bad_frames &&
+    (last_reset_ns_ == 0 ||
+    stamp_ns - last_reset_ns_ >= static_cast<int64_t>(config_.reset_min_interval_s * 1e9));
   return out;
+}
+
+void TrackingHealth::OnTrackerReset(int64_t stamp_ns)
+{
+  last_raw_.reset();
+  gyro_since_raw_.reset();
+  bad_stamps_ns_.clear();
+  consecutive_bad_ = 0;
+  last_reset_ns_ = stamp_ns;
 }
 
 }  // namespace visual_slam

@@ -29,6 +29,7 @@
 #define PQ_CUVSLAM__IMPL__TRACKING_HEALTH_HPP_
 
 #include <cstdint>
+#include <deque>
 #include <limits>
 #include <optional>
 #include <string>
@@ -45,6 +46,11 @@ struct HealthConfig
   double max_speed_mps = 3.0;       // walking with a hand-held rig: ~1.5 m/s
   double max_gyro_error_deg = 5.0;  // per frame; tracked frames rarely exceed 2 deg
   int min_landmarks = 10;           // below: degraded
+  // Reset of the tracker: at least reset_bad_frames rejected or lost frames within the last
+  // reset_window_s seconds (0 disables), at most one reset every reset_min_interval_s.
+  int reset_bad_frames = 8;
+  double reset_window_s = 1.0;
+  double reset_min_interval_s = 2.0;
 };
 
 enum class HealthState : uint8_t
@@ -80,6 +86,8 @@ struct HealthOutput
   double gyro_error_deg = std::numeric_limits<double>::quiet_NaN();
   std::optional<tf2::Transform> guarded_pose;   // empty until the first pose
   int consecutive_bad = 0;                       // rejected or lost frames in a row
+  int bad_in_window = 0;                         // rejected or lost frames in reset_window_s
+  bool reset_tracker = false;                    // the tracker should be reset now
 };
 
 class TrackingHealth
@@ -92,6 +100,10 @@ public:
 
   const HealthConfig & Config() const {return config_;}
 
+  // The tracker was reset: its next pose starts a new odometry frame. The guarded odometry
+  // continues from its last pose; the bad frame history is cleared.
+  void OnTrackerReset(int64_t stamp_ns);
+
 private:
   HealthConfig config_;
   std::optional<tf2::Transform> last_raw_;
@@ -101,6 +113,10 @@ private:
   // frame came without gyroscope.
   std::optional<tf2::Quaternion> gyro_since_raw_;
   int consecutive_bad_ = 0;
+  std::deque<int64_t> bad_stamps_ns_;
+  int64_t last_reset_ns_ = 0;
+
+  HealthOutput Finish(HealthOutput out, int64_t stamp_ns, bool bad);
 };
 
 }  // namespace visual_slam

@@ -196,6 +196,13 @@ struct VisualSlamNode::VisualSlamImpl
   int64_t health_last_stamp_ns = 0;
   HealthState health_last_state = HealthState::OK;
   int health_rejected_run = 0;
+
+  // Rig of the trackers, kept for the reset (ResetTracker).
+  std::optional<cuvslam::Rig> tracker_rig;
+  int tracker_resets = 0;
+  bool CreateTrackers(const cuvslam::Rig & rig);
+  bool ResetTracker(int64_t stamp_ns, const std::string & reason);
+  void ExitVisualizationHelpers();
   std::vector<Eigen::Matrix3d> camera_K;        // per camera, set at initialization
   std::vector<Eigen::Matrix3d> camera_R_imu;    // per camera: rotation imu -> optical frame
   bool compensation_ready = false;

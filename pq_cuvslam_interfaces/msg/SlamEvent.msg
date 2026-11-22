@@ -7,6 +7,7 @@ uint8 CONFIGURED = 4     # node configured: mode and profile in description
 uint8 TRACKER_INITIALIZED = 5
 uint8 POSE_REJECTED = 6   # first of a run of rejected odometry increments (reasons in description)
 uint8 POSE_ACCEPTED = 7   # increments accepted again (number of rejected frames in description)
+uint8 TRACKER_RESET = 8   # tracker recreated after repeated rejected or lost frames (reason in description)
 
 std_msgs/Header header   # stamp of the frame (CONFIGURED: node clock)
 uint8 type

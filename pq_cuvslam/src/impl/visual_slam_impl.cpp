@@ -211,6 +211,7 @@ VisualSlamNode::VisualSlamImpl::VisualSlamImpl(VisualSlamNode & vslam_node)
   health_config.max_speed_mps = node.health_max_speed_mps_;
   health_config.max_gyro_error_deg = node.health_max_gyro_error_deg_;
   health_config.min_landmarks = node.health_min_landmarks_;
+  health_config.reset_bad_frames = node.health_reset_bad_frames_;
   health = TrackingHealth(health_config);
 
   // Device synchronization from the profile (two or more devices, multicamera or multisensor
@@ -561,6 +562,36 @@ void VisualSlamNode::VisualSlamImpl::Initialize()
     PrintImuCalibration(node.get_logger(), imu_calibration);
   }
 
+  tracker_rig = cam_rig;
+  if (!CreateTrackers(cam_rig)) {
+    return;
+  }
+  RCLCPP_INFO(node.get_logger(), "cuVSLAM tracker was successfully initialized.");
+  PublishEvent(
+    SlamEventType::TRACKER_INITIALIZED,
+    rclcpp::Time(initial_camera_info_messages.at(0).value()->header.stamp).nanoseconds(),
+    std::to_string(node.num_cameras_) + " cameras");
+
+  if (node.localize_on_startup_) {
+    // We don't care when this thread returns since we anyways can't do anything if the localization
+    // fails. Thus we detach it.
+    std::thread(
+      [this]() {
+        const PoseType identity;
+        const auto maybe_pose = LocalizeInMap(
+          node.load_map_folder_path_, identity,
+          node.map_frame_);
+        if (!maybe_pose) {
+          RCLCPP_WARN(
+            node.get_logger(),
+            "Could not localize on startup. Try with a different map or different pose hint.");
+        }
+      }).detach();
+  }
+}
+
+bool VisualSlamNode::VisualSlamImpl::CreateTrackers(const cuvslam::Rig & rig)
+{
   // Create cuvslam odometry tracker.
   const cuvslam::Odometry::Config configuration = CreateOdometryConfiguration();
   PrintConfiguration(node.get_logger(), configuration);
@@ -568,7 +599,7 @@ void VisualSlamNode::VisualSlamImpl::Initialize()
   try {
     Stopwatch stopwatch_tracker;
     StopwatchScope ssw_tracker(stopwatch_tracker);
-    cuvslam_odometry = std::make_unique<cuvslam::Odometry>(cam_rig, configuration);
+    cuvslam_odometry = std::make_unique<cuvslam::Odometry>(rig, configuration);
     RCLCPP_INFO(node.get_logger(), "Time taken by cuvslam::Odometry::Odometry(): %f",
             ssw_tracker.Stop());
   } catch (const std::invalid_argument & e) {
@@ -577,23 +608,23 @@ void VisualSlamNode::VisualSlamImpl::Initialize()
       node.get_logger(), "cuVSLAM rejected the configuration, the node will not track: %s",
       e.what());
     configuration_rejected = true;
-    return;
+    return false;
   } catch (const std::exception & e) {
     RCLCPP_ERROR(node.get_logger(), "Failed to initialize cuvslam::Odometry: %s", e.what());
-    return;
+    return false;
   }
 
   if (node.enable_localization_n_mapping_) {
     try {
       Stopwatch stopwatch_slam;
       StopwatchScope ssw_slam(stopwatch_slam);
-      cuvslam_slam = std::make_shared<cuvslam::Slam>(cam_rig, cuvslam_odometry->GetPrimaryCameras(),
+      cuvslam_slam = std::make_shared<cuvslam::Slam>(rig, cuvslam_odometry->GetPrimaryCameras(),
               CreateSlamConfiguration());
       RCLCPP_INFO(node.get_logger(), "Time taken by cuvslam::Slam::Slam(): %f",
               ssw_slam.Stop());
     } catch (const std::exception & e) {
       RCLCPP_ERROR(node.get_logger(), "Failed to initialize cuvslam::Slam: %s", e.what());
-      return;
+      return false;
     }
   }
 
@@ -630,31 +661,10 @@ void VisualSlamNode::VisualSlamImpl::Initialize()
       node.get_logger());
 #endif
   }
-  RCLCPP_INFO(node.get_logger(), "cuVSLAM tracker was successfully initialized.");
-  PublishEvent(
-    SlamEventType::TRACKER_INITIALIZED,
-    rclcpp::Time(initial_camera_info_messages.at(0).value()->header.stamp).nanoseconds(),
-    std::to_string(node.num_cameras_) + " cameras");
-
-  if (node.localize_on_startup_) {
-    // We don't care when this thread returns since we anyways can't do anything if the localization
-    // fails. Thus we detach it.
-    std::thread(
-      [this]() {
-        const PoseType identity;
-        const auto maybe_pose = LocalizeInMap(
-          node.load_map_folder_path_, identity,
-          node.map_frame_);
-        if (!maybe_pose) {
-          RCLCPP_WARN(
-            node.get_logger(),
-            "Could not localize on startup. Try with a different map or different pose hint.");
-        }
-      }).detach();
-  }
+  return true;
 }
 
-void VisualSlamNode::VisualSlamImpl::Exit()
+void VisualSlamNode::VisualSlamImpl::ExitVisualizationHelpers()
 {
   // observations_vis_helper.Exit();
   landmarks_vis_helper.Exit();
@@ -666,6 +676,37 @@ void VisualSlamNode::VisualSlamImpl::Exit()
   localizer_observations_vis_helper.Exit();
   localizer_lc_landmarks_vis_helper.Exit();
 #endif
+}
+
+bool VisualSlamNode::VisualSlamImpl::ResetTracker(int64_t stamp_ns, const std::string & reason)
+{
+  if (!tracker_rig) {
+    return false;
+  }
+  // New odometry (and SLAM) with the same rig and configuration: no wait for the camera_info,
+  // no new initialization. The SLAM map is lost; the guarded odometry continues from its last
+  // pose.
+  ExitVisualizationHelpers();
+  cuvslam_odometry.reset();
+  cuvslam_slam.reset();
+  const auto t0 = std::chrono::steady_clock::now();
+  const bool ok = CreateTrackers(*tracker_rig);
+  const double ms = std::chrono::duration<double, std::milli>(
+    std::chrono::steady_clock::now() - t0).count();
+  health.OnTrackerReset(stamp_ns);
+  ++tracker_resets;
+  char text[160];
+  std::snprintf(
+    text, sizeof(text), "tracker reset (%s), %.0f ms%s", reason.c_str(), ms,
+    ok ? "" : ", failed");
+  PublishEvent(SlamEventType::TRACKER_RESET, stamp_ns, text);
+  return ok;
+}
+
+void VisualSlamNode::VisualSlamImpl::Exit()
+{
+  ExitVisualizationHelpers();
+  tracker_rig.reset();
 
   if (cuvslam_odometry != nullptr) {
     cuvslam_odometry.reset();
@@ -1467,6 +1508,13 @@ void VisualSlamNode::VisualSlamImpl::UpdatePose(
       std::chrono::steady_clock::now() - callback_start).count(),
     idx_and_image_msgs, health_out);
 
+  if (health_out.reset_tracker) {
+    ResetTracker(
+      latest_ts, std::to_string(health_out.bad_in_window) + " rejected or lost frames in " +
+      std::to_string(health.Config().reset_window_s).substr(0, 3) + " s");
+    return;
+  }
+
   // Publish status.
   std_msgs::msg::Header header;
   header.stamp = timestamp_output;
@@ -1740,7 +1788,8 @@ void VisualSlamNode::VisualSlamImpl::PublishEvent(
     {SlamEventType::CONFIGURED, "configured"},
     {SlamEventType::TRACKER_INITIALIZED, "tracker_initialized"},
     {SlamEventType::POSE_REJECTED, "pose_rejected"},
-    {SlamEventType::POSE_ACCEPTED, "pose_accepted"}};
+    {SlamEventType::POSE_ACCEPTED, "pose_accepted"},
+    {SlamEventType::TRACKER_RESET, "tracker_reset"}};
   const auto name_it = kNames.find(type);
   const std::string name = name_it != kNames.end() ? name_it->second : std::to_string(type);
   if (node.events_pub_) {

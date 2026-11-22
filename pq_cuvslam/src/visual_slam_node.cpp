@@ -187,6 +187,8 @@ void VisualSlamNode::DeclareAndReadParameters()
   health_max_speed_mps_ = Param<double>("health_max_speed_mps", 3.0);
   health_max_gyro_error_deg_ = Param<double>("health_max_gyro_error_deg", 5.0);
   health_min_landmarks_ = Param<int>("health_min_landmarks", 10);
+  // Reset of the tracker after this many rejected or lost frames within 1 s (0: never).
+  health_reset_bad_frames_ = Param<int>("health_reset_bad_frames", 8);
   diagnostics_pixel_stride_ = Param<int>("diagnostics_pixel_stride", 4);
   {
     rcl_interfaces::msg::ParameterDescriptor descriptor;
