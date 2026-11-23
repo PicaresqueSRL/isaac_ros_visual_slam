@@ -34,12 +34,14 @@ from diagnostic_msgs.msg import DiagnosticArray
 from nav_msgs.msg import Odometry
 import numpy as np
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
-from rcl_interfaces.srv import GetParameters, SetParameters
+from rcl_interfaces.srv import DescribeParameters, GetParameters, ListParameters, SetParameters
 import rclpy
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.serialization import deserialize_message
+from rosbag2_interfaces.srv import Pause, Resume, Seek, SetRate
+from rosgraph_msgs.msg import Clock
 from rosidl_runtime_py.utilities import get_message
 from sensor_msgs.msg import CompressedImage, Image
 
@@ -53,6 +55,27 @@ EVENT_NAMES = {1: 'tracking lost', 2: 'tracking recovered', 3: 'loop closure', 4
                5: 'tracker initialized', 6: 'pose rejected', 7: 'pose accepted',
                8: 'tracker reset', 9: 'camera switch'}
 HEALTH_NAMES = {0: 'ok', 1: 'degraded', 2: 'rejected', 3: 'lost'}
+PARAM_TYPES = {ParameterType.PARAMETER_BOOL: 'bool', ParameterType.PARAMETER_INTEGER: 'integer',
+               ParameterType.PARAMETER_DOUBLE: 'double', ParameterType.PARAMETER_STRING: 'string',
+               ParameterType.PARAMETER_BYTE_ARRAY: 'byte[]',
+               ParameterType.PARAMETER_BOOL_ARRAY: 'bool[]',
+               ParameterType.PARAMETER_INTEGER_ARRAY: 'integer[]',
+               ParameterType.PARAMETER_DOUBLE_ARRAY: 'double[]',
+               ParameterType.PARAMETER_STRING_ARRAY: 'string[]'}
+PLAYER = '/rosbag2_player'
+
+
+def param_value(v):
+    """Python value of a ParameterValue."""
+    return {ParameterType.PARAMETER_BOOL: lambda: v.bool_value,
+            ParameterType.PARAMETER_INTEGER: lambda: v.integer_value,
+            ParameterType.PARAMETER_DOUBLE: lambda: v.double_value,
+            ParameterType.PARAMETER_STRING: lambda: v.string_value,
+            ParameterType.PARAMETER_BOOL_ARRAY: lambda: list(v.bool_array_value),
+            ParameterType.PARAMETER_INTEGER_ARRAY: lambda: list(v.integer_array_value),
+            ParameterType.PARAMETER_DOUBLE_ARRAY: lambda: list(v.double_array_value),
+            ParameterType.PARAMETER_STRING_ARRAY: lambda: list(v.string_array_value),
+            }.get(v.type, lambda: None)()
 
 
 class Meter:
@@ -230,7 +253,11 @@ class RosBridge(Node):
         self.slam = Slam()
         self.slam_subs = {}       # topic -> subscription
         self.diagnostics = {}     # status name -> dict (/diagnostics, e.g. RealSense driver)
-        self.create_subscription(DiagnosticArray, '/diagnostics', self.on_diagnostics, 10)
+        # Best effort: compatible with reliable and best-effort publishers (the player /clock).
+        self.create_subscription(DiagnosticArray, '/diagnostics', self.on_diagnostics,
+                                 qos_profile_sensor_data)
+        self.clock = None         # (bag time s, wall time) of the last /clock of the player
+        self.create_subscription(Clock, '/clock', self.on_clock, qos_profile_sensor_data)
         self.create_timer(2.0, self.refresh_graph)
         self.refresh_graph()
 
@@ -365,7 +392,50 @@ class RosBridge(Node):
             return {k: dict(v, age_s=round(now - v['time'], 1)) for k, v in self.diagnostics.items()
                     if now - v['time'] < 30}
 
+    # ---- bag player (rosbag2 services) ----
+
+    def on_clock(self, msg):
+        self.clock = (msg.clock.sec + msg.clock.nanosec * 1e-9, time.time())
+
+    def player(self, command, value=None):
+        if command == 'pause':
+            self._call(Pause, f'{PLAYER}/pause', Pause.Request())
+        elif command == 'resume':
+            self._call(Resume, f'{PLAYER}/resume', Resume.Request())
+        elif command == 'rate':
+            if not self._call(SetRate, f'{PLAYER}/set_rate', SetRate.Request(rate=float(value))).success:
+                raise ValueError(f'rate {value} refused')
+        elif command == 'seek':
+            t = float(value)
+            req = Seek.Request()
+            req.time.sec, req.time.nanosec = int(t), int(round((t - int(t)) * 1e9))
+            if not self._call(Seek, f'{PLAYER}/seek', req).success:
+                raise ValueError('seek refused (time outside the bag)')
+        else:
+            raise ValueError(f'unknown player command {command}')
+
     # ---- parameters of other nodes ----
+
+    def node_parameters(self, node):
+        """All parameters of a node: name, type, value, read-only, description, range."""
+        res = self._call(ListParameters, f'{node}/list_parameters', ListParameters.Request())
+        names = sorted(res.result.names)
+        descs = self._call(DescribeParameters, f'{node}/describe_parameters',
+                           DescribeParameters.Request(names=names)).descriptors
+        values = self._call(GetParameters, f'{node}/get_parameters',
+                            GetParameters.Request(names=names)).values
+        out = []
+        for name, d, v in zip(names, descs, values):
+            item = {'name': name, 'type': PARAM_TYPES.get(v.type, 'unset'), 'value': param_value(v),
+                    'read_only': bool(d.read_only), 'description': d.description}
+            if d.integer_range:
+                r = d.integer_range[0]
+                item.update(min=r.from_value, max=r.to_value, step=r.step)
+            elif d.floating_point_range:
+                r = d.floating_point_range[0]
+                item.update(min=r.from_value, max=r.to_value, step=r.step)
+            out.append(item)
+        return out
 
     def _call(self, srv_type, service, request, timeout=3.0):
         client = self.create_client(srv_type, service)
@@ -384,24 +454,33 @@ class RosBridge(Node):
     def get_param(self, node, name):
         req = GetParameters.Request(names=[name])
         res = self._call(GetParameters, f'{node}/get_parameters', req)
-        if not res.values:
-            return None
-        v = res.values[0]
-        return {ParameterType.PARAMETER_BOOL: v.bool_value,
-                ParameterType.PARAMETER_INTEGER: v.integer_value,
-                ParameterType.PARAMETER_DOUBLE: v.double_value,
-                ParameterType.PARAMETER_STRING: v.string_value}.get(v.type)
+        return param_value(res.values[0]) if res.values else None
 
-    def set_param(self, node, name, value):
+    def get_param_typed(self, node, name):
+        res = self._call(GetParameters, f'{node}/get_parameters', GetParameters.Request(names=[name]))
+        if not res.values or res.values[0].type == ParameterType.PARAMETER_NOT_SET:
+            raise ValueError(f'{node} has no parameter {name}')
+        return res.values[0].type, param_value(res.values[0])
+
+    def set_param(self, node, name, value, type_=None):
+        """Set a parameter; type_ (ParameterType) converts the value (e.g. from JSON)."""
         v = ParameterValue()
-        if isinstance(value, bool):
-            v.type, v.bool_value = ParameterType.PARAMETER_BOOL, value
-        elif isinstance(value, int):
-            v.type, v.integer_value = ParameterType.PARAMETER_INTEGER, value
-        elif isinstance(value, float):
-            v.type, v.double_value = ParameterType.PARAMETER_DOUBLE, value
+        if type_ is None:
+            type_ = (ParameterType.PARAMETER_BOOL if isinstance(value, bool) else
+                     ParameterType.PARAMETER_INTEGER if isinstance(value, int) else
+                     ParameterType.PARAMETER_DOUBLE if isinstance(value, float) else
+                     ParameterType.PARAMETER_STRING)
+        v.type = type_
+        if type_ == ParameterType.PARAMETER_BOOL:
+            v.bool_value = value if isinstance(value, bool) else str(value).lower() in ('1', 'true')
+        elif type_ == ParameterType.PARAMETER_INTEGER:
+            v.integer_value = int(round(float(value)))
+        elif type_ == ParameterType.PARAMETER_DOUBLE:
+            v.double_value = float(value)
+        elif type_ == ParameterType.PARAMETER_STRING:
+            v.string_value = str(value)
         else:
-            v.type, v.string_value = ParameterType.PARAMETER_STRING, str(value)
+            raise ValueError(f'{name}: parameters of this type cannot be set from the console')
         req = SetParameters.Request(parameters=[Parameter(name=name, value=v)])
         res = self._call(SetParameters, f'{node}/set_parameters', req)
         r = res.results[0]

@@ -66,3 +66,13 @@ ul.events li, ul.plain li { padding: 2px 0; border-bottom: 1px solid var(--borde
 dl.kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0; font-size: 13px; }
 dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; }
 .cam { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+.seek { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+.seek input { flex: 1; }
+td input[type=number], td input[type=text] { width: 9em; }
+td.changed { box-shadow: inset 3px 0 var(--warn); }
+.range { font-size: 11px; color: var(--muted); margin-left: 4px; }
+details summary { cursor: pointer; margin: 12px 0 6px; color: var(--muted); }
+.warnval input, .warnval { color: var(--bad); font-weight: 600; }
+#settings table, #settings-other table { table-layout: fixed; }
+#settings th:first-child, #settings-other th:first-child { width: 30%; }
+#settings th:last-child, #settings-other th:last-child { width: 14%; }

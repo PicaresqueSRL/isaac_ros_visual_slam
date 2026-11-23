@@ -30,7 +30,12 @@ containers mount them at the same path.
 - **Live**: cameras on/off, IR emitter of each camera (a recording does not start with an
   emitter on, unless confirmed), recording with or without depth, four previews (any image
   topic; fps, saturated pixels, valid depth), SLAM trajectory (top view), tracker state and
-  events of pq_cuvslam.
+  events of pq_cuvslam. *Playback*: a recording played without SLAM, to look at it (pause, rate,
+  seek; the cameras must be off).
+- **Cameras**: settings of the camera drivers side by side (streams, resolutions, IR emitter,
+  exposure, gain, RGB), changed at runtime on one or all cameras; *Save as startup settings*
+  writes `data_dir/camera_settings.yaml`, applied after *Start cameras*. The parameters of the
+  drivers at the start of each recording are saved in `bags/<name>.camera_settings.yaml`.
 - **Sessions**: recordings; *Play + SLAM* plays a recording in real time with the chosen
   profile (the bag `<name>_aligned` from `tools/align_depth.py` is played with it), records the
   SLAM output and builds the Rerun file; SLAM runs with their results.
@@ -48,3 +53,6 @@ containers mount them at the same path.
 
 The container image is the pq_cuvslam image (rclpy, OpenCV, pq_cuvslam messages); nothing else
 is installed.
+
+Without cameras (development on a PC): `mock_cameras.py` starts /cam1 and /cam2 nodes with D455
+driver parameters, and a played bag gives the previews.

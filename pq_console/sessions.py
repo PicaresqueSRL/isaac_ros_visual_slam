@@ -79,6 +79,7 @@ class Job:
         self.started = time.time()
         self.finished = None
         self.log = []
+        self.meta = {}
         self.stop_event = threading.Event()
 
     def info(self, text):
@@ -86,7 +87,7 @@ class Job:
         del self.log[:-200]
 
     def to_dict(self):
-        return {'kind': self.kind, 'name': self.name, 'state': self.state,
+        return {'kind': self.kind, 'name': self.name, 'state': self.state, 'meta': self.meta,
                 'started': self.started, 'finished': self.finished, 'log': self.log[-40:]}
 
 
@@ -235,10 +236,63 @@ class Sessions:
             if profile not in self.profile_names():
                 raise ValueError(f'no profile {profile}')
             job = Job('replay', f'{bag}_{profile}')
+            job.meta = self.bag_info(bag)
+            job.meta.update(rate=float(rate), profile=profile)
             self.job = job
         threading.Thread(target=self._replay, args=(job, bag, profile, float(rate), rerun),
                          daemon=True).start()
         return job.name
+
+    def bag_info(self, bag):
+        """Start (s, receive time) and duration of a recording, from its metadata."""
+        with open(os.path.join(self.c.bags_dir, bag, 'metadata.yaml')) as f:
+            info = yaml.safe_load(f)['rosbag2_bagfile_information']
+        return {'bag': bag,
+                'start': info['starting_time']['nanoseconds_since_epoch'] / 1e9,
+                'duration_s': info['duration']['nanoseconds'] / 1e9}
+
+    def play_inputs(self, bag):
+        inputs = f'-i /bags/{bag}'
+        if os.path.isfile(os.path.join(self.c.bags_dir, f'{bag}_aligned', 'metadata.yaml')):
+            inputs += f' -i /bags/{bag}_aligned'
+        return inputs
+
+    def play_args(self, inputs, rate, extra=''):
+        """Player container (image of the cameras: it knows the RealSense metadata messages)."""
+        return ['run', '--rm', '--name', 'pq_play', *self.ros_args(), '-v', f'{self.c.bags_dir}:/bags:ro',
+                '--entrypoint', 'bash', self.c.camera_image or self.c.slam_image, '-c',
+                f'source /opt/ros/lyrical/setup.bash; ros2 bag play {inputs} --rate {rate} {extra} '
+                '> /dev/null 2>&1']
+
+    def start_view(self, bag, rate=1.0, paused=False):
+        """Play a recording without SLAM, to look at it (pause, rate and seek via the player)."""
+        with self.lock:
+            if self.job and self.job.state == 'running':
+                raise ValueError(f'{self.job.kind} {self.job.name} is running')
+            if self.recording or self.cameras_running():
+                raise ValueError('stop the cameras first: the bag uses the same topics')
+            if not os.path.isfile(os.path.join(self.c.bags_dir, bag, 'metadata.yaml')):
+                raise ValueError(f'no recording {bag}')
+            job = Job('view', bag)
+            job.meta = self.bag_info(bag)
+            job.meta.update(rate=float(rate), paused=bool(paused))
+            self.job = job
+        threading.Thread(target=self._view, args=(job, bag, float(rate), paused), daemon=True).start()
+        return job.name
+
+    def _view(self, job, bag, rate, paused):
+        try:
+            docker('rm', '-f', 'pq_play')
+            job.info(f'play {bag} at rate {rate}')
+            # /clock at 10 Hz: position of the playback for the console.
+            extra = '--clock 10' + (' --start-paused' if paused else '')
+            docker(*self.play_args(self.play_inputs(bag), rate, extra), timeout=24 * 3600)
+            job.state = 'stopped' if job.stop_event.is_set() else 'done'
+        except Exception as e:   # noqa: B902 - shown in the console
+            job.info(f'error: {e}')
+            job.state = 'failed'
+        job.finished = time.time()
+        job.info(job.state)
 
     def stop_job(self):
         if self.job and self.job.state == 'running':
@@ -277,15 +331,9 @@ class Sessions:
             if code:
                 raise RuntimeError(out)
             time.sleep(8)   # nodes active and recorder subscribed before the first frame
-            inputs = f'-i /bags/{bag}'
-            if os.path.isfile(os.path.join(c.bags_dir, f'{bag}_aligned', 'metadata.yaml')):
-                inputs += f' -i /bags/{bag}_aligned'
             job.info(f'play {bag} at rate {rate}')
             if not job.stop_event.is_set():
-                docker('run', '--rm', '--name', 'pq_play', *self.ros_args(), '-v',
-                       f'{c.bags_dir}:/bags:ro', '--entrypoint', 'bash', c.slam_image, '-c',
-                       f'source /opt/ros/lyrical/setup.bash; ros2 bag play {inputs} --rate {rate} '
-                       '> /dev/null 2>&1', timeout=24 * 3600)
+                docker(*self.play_args(self.play_inputs(bag), rate), timeout=24 * 3600)
             job.info('play finished, stopping the SLAM')
             time.sleep(3)
             docker('exec', 'pq_slamrec', 'bash', '-c', 'pkill -INT -f "bag record"')

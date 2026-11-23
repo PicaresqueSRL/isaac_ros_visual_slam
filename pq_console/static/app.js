@@ -61,8 +61,9 @@ function setTab(t) {
   document.querySelectorAll('button.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === t));
   document.querySelectorAll('.tab-body').forEach((s) => s.classList.toggle('hidden', s.id !== 'tab-' + t));
   updatePreviews();
-  if (t === 'sessions') refreshLists();
+  if (t === 'sessions' || t === 'live') refreshLists();
   if (t === 'graph') refreshTopics();
+  if (t === 'cameras') refreshSettings();
 }
 
 // ---- state ----
@@ -81,7 +82,9 @@ function renderStatus() {
     parts.push(chip(`${cam} emitter ${v === null ? '?' : v ? 'ON' : 'off'}`, v ? 'bad' : v === null ? 'warn' : 'ok'));
   }
   if (s.recording) parts.push(chip('recording ' + s.recording.name, 'bad'));
-  if (s.job && s.job.state === 'running') parts.push(chip('replay ' + s.job.name, 'warn'));
+  if (s.job && s.job.state === 'running') {
+    parts.push(chip((s.job.kind === 'view' ? 'playing ' : 'SLAM replay ') + s.job.name, 'warn'));
+  }
   if (s.disk) parts.push(chip(fmtBytes(s.disk.free) + ' free', s.disk.free < 20e9 ? 'bad' : ''));
   $('status').innerHTML = parts.join('');
 }
@@ -136,16 +139,50 @@ $('cam-stop').onclick = () => confirm('Stop the cameras?') && post('cameras/stop
 
 function renderJob() {
   const j = state.job;
-  const text = j ? `${j.name}: ${j.state}${j.state === 'running' ? ' · ' + fmtDur(state.time - j.started) : ''}` : 'none';
+  const text = j ? `${j.kind === 'view' ? 'view' : 'SLAM'} ${j.name}: ${j.state}${j.state === 'running' ? ' · ' + fmtDur(state.time - j.started) : ''}` : 'none';
   $('job').textContent = text;
   const lastLog = j && j.log.length ? j.log[j.log.length - 1].slice(9) : '';
-  $('job-live').textContent = j ? text + (lastLog && lastLog !== j.state ? ' — ' + lastLog : '') : 'none';
+  $('job-live').textContent = j ? text + (lastLog && lastLog !== j.state ? ' — ' + lastLog : '') : 'nothing playing';
+  renderPlayback(j);
   $('job-log').textContent = j ? j.log.join('\n') : '';
   $('job-stop').disabled = !j || j.state !== 'running';
   if (j && lastJobState === 'running' && j.state !== 'running' && tab === 'sessions') refreshLists();
   lastJobState = j ? j.state : null;
 }
 $('job-stop').onclick = () => confirm('Stop the replay?') && post('job/stop').then(refreshState);
+
+// ---- playback of a recording (view without SLAM; SLAM replays are shown here too) ----
+let seeking = false;
+function renderPlayback(j) {
+  const running = j && j.state === 'running';
+  const view = running && j.kind === 'view';
+  const m = (j && j.meta) || {};
+  $('pb-play').disabled = running || !$('pb-bag').value || state.cameras_running || !!state.recording;
+  $('pb-stop').disabled = !running;
+  $('pb-pause').disabled = !view;
+  $('pb-pause').textContent = view && m.paused ? 'Resume' : 'Pause';
+  $('pb-seek').disabled = !view;
+  if (running && m.rate) $('pb-rate').value = String(m.rate);
+  if (running && m.bag && [...$('pb-bag').options].some((o) => o.value === m.bag)) $('pb-bag').value = m.bag;
+  $('pb-bag').disabled = running;
+  const dur = running ? m.duration_s || 0 : 0;
+  const pos = running && state.clock && m.start ? Math.min(Math.max(state.clock - m.start, 0), dur) : 0;
+  $('pb-seek').max = Math.max(dur, 0.1);
+  if (!seeking) $('pb-seek').value = pos;
+  $('pb-time').textContent = running ? `${fmtDur(pos)} / ${fmtDur(dur)}` : '';
+}
+$('pb-play').onclick = () => post('view/start', { bag: $('pb-bag').value, rate: +$('pb-rate').value })
+  .then(() => { slam = { generation: null, paths: {}, since: {} }; refreshState(); });
+$('pb-pause').onclick = () => post('player', { command: state.job.meta.paused ? 'resume' : 'pause' }).then(refreshState);
+$('pb-stop').onclick = () => post('job/stop').then(refreshState);
+$('pb-rate').onchange = () => {
+  if (state && state.job && state.job.state === 'running') post('player', { command: 'rate', value: +$('pb-rate').value });
+};
+$('pb-seek').oninput = () => { seeking = true; };
+$('pb-seek').onchange = async () => {
+  try { await post('player', { command: 'seek', value: state.job.meta.start + +$('pb-seek').value }); }
+  finally { setTimeout(() => { seeking = false; }, 1500); }
+};
 
 // ---- previews ----
 function imageTopics() {
@@ -283,12 +320,26 @@ async function refreshLists() {
       showProfile();
     }
     const [recs, runs] = await Promise.all([get('/api/recordings'), get('/api/runs')]);
+    const pbOptions = recs.map((r) => `<option value="${esc(r.name)}">${esc(r.name)} (${fmtDur(r.duration_s)})</option>`).join('');
+    if ($('pb-bag').dataset.html !== pbOptions) {
+      const keep = $('pb-bag').value || load('view_bag', '');
+      $('pb-bag').innerHTML = pbOptions;
+      $('pb-bag').dataset.html = pbOptions;
+      if (recs.some((r) => r.name === keep)) $('pb-bag').value = keep;
+    }
     $('recordings').querySelector('tbody').innerHTML = recs.map((r) => `<tr>
       <td>${esc(r.name)}</td><td>${fmtDate(r.start)}</td><td class="num">${fmtDur(r.duration_s)}</td>
       <td class="num">${fmtBytes(r.size)}</td><td>${esc(r.cameras.join(', '))}</td>
       <td>${r.depth ? 'depth' : ''}${r.aligned ? (r.depth ? ', ' : '') + 'aligned' : ''}</td>
-      <td><button class="small" data-play="${esc(r.name)}">Play + SLAM</button></td></tr>`).join('') ||
+      <td><button class="small secondary" data-view="${esc(r.name)}">View</button>
+        <button class="small" data-play="${esc(r.name)}">Play + SLAM</button></td></tr>`).join('') ||
       '<tr><td colspan="7" class="muted">no recordings</td></tr>';
+    $('recordings').querySelectorAll('[data-view]').forEach((b) => b.onclick = async () => {
+      $('pb-bag').value = b.dataset.view;
+      save('view_bag', b.dataset.view);
+      await post('view/start', { bag: b.dataset.view, rate: +$('pb-rate').value });
+      setTab('live');
+    });
     $('recordings').querySelectorAll('[data-play]').forEach((b) => b.onclick = async () => {
       await post('replay/start', { bag: b.dataset.play, profile: $('profile').value, rerun: $('rerun').checked });
       slam = { generation: null, paths: {}, since: {} };
@@ -311,6 +362,75 @@ function showProfile() {
   $('profile-desc').textContent = p ? `${p.mode}: ${p.description}` : '';
 }
 
+$('pb-bag').onchange = () => save('view_bag', $('pb-bag').value);
+
+// ---- camera settings ----
+let settings = null;
+async function refreshSettings() {
+  try { settings = await get('/api/camera_settings'); } catch (e) { showError(e.message); return; }
+  renderSettings();
+}
+function paramEditor(cam, p) {
+  if (!p) return '<span class="muted">—</span>';
+  const attrs = `data-cam="${esc(cam)}" data-name="${esc(p.name)}" title="${esc(p.description)}"`;
+  if (p.read_only || !['bool', 'integer', 'double', 'string'].includes(p.type)) {
+    return `<span title="${esc(p.description)}">${esc(JSON.stringify(p.value))}</span>`;
+  }
+  if (p.type === 'bool') return `<input type="checkbox" ${attrs} ${p.value ? 'checked' : ''}>`;
+  if (p.type === 'string') return `<input type="text" ${attrs} value="${esc(p.value)}">`;
+  const range = p.min != null ? `<span class="range">${p.min}–${p.max}</span>` : '';
+  const step = p.type === 'integer' ? (p.step || 1) : (p.step || 'any');
+  return `<input type="number" ${attrs} value="${p.value}" step="${step}"` +
+    (p.min != null ? ` min="${p.min}" max="${p.max}"` : '') + `>${range}`;
+}
+function settingsTable(names, cams, byCam) {
+  const saved = settings.saved || {};
+  const rows = names.filter((n) => cams.some((c) => byCam[c][n])).map((n) => {
+    const cells = cams.map((c) => {
+      const p = byCam[c][n];
+      const differs = saved[c] && n in saved[c] && p && JSON.stringify(saved[c][n]) !== JSON.stringify(p.value);
+      const warn = n === 'depth_module.emitter_enabled' && p && p.value ? ' warnval' : '';
+      return `<td class="${differs ? 'changed' : ''}${warn}">${paramEditor(c, p)}</td>`;
+    }).join('');
+    const show = (v) => typeof v === 'string' ? v : JSON.stringify(v);
+    const sv = cams.map((c) => saved[c] && n in saved[c] ? show(saved[c][n]) : '').filter(Boolean);
+    const startup = new Set(sv).size <= 1 ? (sv[0] || '') : sv.join(' / ');
+    return `<tr><td>${esc(n)}</td>${cells}<td class="muted">${esc(startup)}</td></tr>`;
+  }).join('');
+  return rows ? `<table><thead><tr><th>Parameter</th>${cams.map((c) => `<th>${esc(c)}</th>`).join('')}<th>startup</th></tr></thead><tbody>${rows}</tbody></table>` : '';
+}
+function renderSettings() {
+  const s = settings;
+  const cams = Object.keys(s.cameras);
+  const byCam = {};
+  for (const c of cams) byCam[c] = Object.fromEntries(s.cameras[c].params.map((p) => [p.name, p]));
+  const down = cams.filter((c) => !s.cameras[c].available);
+  let html = down.length ? `<p class="muted">Not running: ${esc(down.join(', '))}${
+    down.map((c) => s.cameras[c].error ? ' (' + esc(s.cameras[c].error) + ')' : '').join('')}</p>` : '';
+  for (const [title, names] of s.groups) {
+    const t = settingsTable(names, cams, byCam);
+    if (t) html += `<h3>${esc(title)}</h3>${t}`;
+  }
+  $('settings').innerHTML = html || '<p class="muted">Start the cameras to see their settings.</p>';
+  const grouped = new Set(s.groups.flatMap(([, n]) => n));
+  const f = $('settings-filter').value.trim().toLowerCase();
+  const others = [...new Set(cams.flatMap((c) => Object.keys(byCam[c])))].sort()
+    .filter((n) => !grouped.has(n) && (!f || n.toLowerCase().includes(f)));
+  $('settings-other').innerHTML = settingsTable(others, cams, byCam);
+  $('settings-saved').textContent = s.saved_time ? 'startup settings saved ' + fmtDate(s.saved_time) : 'no startup settings saved';
+  if (s.startup_log && s.startup_log.length) $('settings-saved').textContent += ' · ' + s.startup_log[s.startup_log.length - 1];
+  document.querySelectorAll('#tab-cameras [data-name]').forEach((el) => el.onchange = async () => {
+    const value = el.type === 'checkbox' ? el.checked : el.type === 'number' ? +el.value : el.value;
+    const cameras = $('both').checked ? cams.filter((c) => byCam[c][el.dataset.name]) : [el.dataset.cam];
+    el.disabled = true;
+    try { await post('param', { cameras, name: el.dataset.name, value }); } catch (e) { /* shown */ }
+    refreshSettings();
+  });
+}
+$('settings-reload').onclick = refreshSettings;
+$('settings-filter').oninput = () => settings && renderSettings();
+$('settings-save').onclick = () => post('settings/save').then(refreshSettings);
+
 // ---- nodes and topics ----
 async function refreshTopics() {
   try { topics = await get('/api/topics'); } catch (e) { return; }
@@ -332,7 +452,7 @@ $('topic-filter').oninput = refreshTopics;
 
 // ---- loops ----
 const hashTab = location.hash.slice(1);
-setTab(['live', 'sessions', 'graph'].includes(hashTab) ? hashTab : load('tab', 'live'));
+setTab(['live', 'cameras', 'sessions', 'graph'].includes(hashTab) ? hashTab : load('tab', 'live'));
 refreshState();
 refreshTopics();
 setInterval(refreshState, 1000);

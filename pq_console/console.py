@@ -31,6 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import mimetypes
 import os
+import threading
 import time
 import traceback
 from urllib.parse import parse_qs, urlparse
@@ -38,9 +39,34 @@ from urllib.parse import parse_qs, urlparse
 import config as config_mod
 import ros_bridge
 import sessions as sessions_mod
+import yaml
 
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
 EMITTER = 'depth_module.emitter_enabled'
+
+# Camera settings shown first, by group (only the parameters the driver has are shown). The
+# other parameters of the driver are listed below them.
+ROI = ('auto_exposure_roi.left', 'auto_exposure_roi.right', 'auto_exposure_roi.top',
+       'auto_exposure_roi.bottom')
+SETTING_GROUPS = [
+    ('Streams', ['enable_infra1', 'enable_infra2', 'enable_color', 'enable_depth', 'enable_gyro',
+                 'enable_accel', 'align_depth.enable']),
+    ('Resolution and fps', ['depth_module.infra_profile', 'depth_module.depth_profile',
+                            'rgb_camera.color_profile']),
+    ('Infrared and depth', ['depth_module.emitter_enabled', 'depth_module.laser_power',
+                            'depth_module.enable_auto_exposure', 'depth_module.exposure',
+                            'depth_module.gain', 'depth_module.auto_exposure_limit_toggle',
+                            'depth_module.auto_exposure_limit', 'depth_module.auto_gain_limit_toggle',
+                            'depth_module.auto_gain_limit', 'depth_module.hdr_enabled'] +
+     ['depth_module.' + r for r in ROI]),
+    ('RGB', ['rgb_camera.enable_auto_exposure', 'rgb_camera.exposure', 'rgb_camera.gain',
+             'rgb_camera.auto_exposure_priority', 'rgb_camera.enable_auto_white_balance',
+             'rgb_camera.white_balance', 'rgb_camera.backlight_compensation'] +
+     ['rgb_camera.' + r for r in ROI]),
+]
+SETTING_NAMES = [n for _, names in SETTING_GROUPS for n in names]
+# Changing these restarts a stream of the driver: not during a recording.
+RESTARTING = ('enable_', 'align_depth.', '_profile')
 
 
 class Console:
@@ -50,6 +76,8 @@ class Console:
         self.ros = ros_bridge.start()
         self.sessions = sessions_mod.Sessions(config)
         self.emitter_cache = {'time': 0.0, 'value': {}}
+        self.settings_file = os.path.join(config.data_dir, 'camera_settings.yaml')
+        self.settings_log = []    # messages of the startup settings
 
     def emitters(self, max_age=3.0):
         """IR emitter of each camera (parameter of the driver node); None if not reachable."""
@@ -74,20 +102,133 @@ class Console:
         s['emitters'] = self.emitters() if s['cameras_running'] else {}
         s['previews'] = self.ros.previews_state()
         s['diagnostics'] = self.ros.diagnostics_state()
+        clock = self.ros.clock
+        s['clock'] = clock[0] if clock and time.time() - clock[1] < 2 else None
         s['time'] = time.time()
         return s
+
+    # ---- camera settings ----
+
+    def camera_settings(self):
+        nodes = set(self.ros.topics_state()['nodes'])
+        cameras = {}
+        for cam in self.c.cameras:
+            node = f'/{cam.name}'
+            if node not in nodes:
+                cameras[cam.name] = {'available': False, 'params': []}
+                continue
+            try:
+                cameras[cam.name] = {'available': True, 'params': self.ros.node_parameters(node)}
+            except Exception as e:   # noqa: B902 - driver starting or busy
+                cameras[cam.name] = {'available': False, 'params': [], 'error': str(e)}
+        saved = self.saved_settings()
+        return {'groups': SETTING_GROUPS, 'cameras': cameras, 'saved': saved,
+                'saved_time': os.path.getmtime(self.settings_file) if saved else None,
+                'startup_log': self.settings_log[-10:],
+                'recording': bool(self.sessions.recording)}
+
+    def set_camera_param(self, cameras, name, value):
+        if self.sessions.recording and any(k in name for k in RESTARTING):
+            raise ValueError(f'{name} restarts the stream: not during a recording')
+        results = {}
+        for cam in cameras:
+            node = f'/{cam}'
+            type_, _ = self.ros.get_param_typed(node, name)
+            self.ros.set_param(node, name, value, type_)
+            results[cam] = self.ros.get_param(node, name)
+        if name == EMITTER:
+            self.emitter_cache['time'] = 0.0
+        return results
+
+    def snapshot(self, names=None, writable_only=False):
+        """Current settings of the cameras ({camera: {name: value}})."""
+        out = {}
+        for cam in self.c.cameras:
+            try:
+                params = self.ros.node_parameters(f'/{cam.name}')
+            except Exception:   # noqa: B902 - camera not running
+                continue
+            out[cam.name] = {p['name']: p['value'] for p in params
+                             if (names is None or p['name'] in names) and
+                             not (writable_only and p['read_only'])}
+        return out
+
+    def saved_settings(self):
+        try:
+            with open(self.settings_file) as f:
+                return yaml.safe_load(f) or {}
+        except (OSError, yaml.YAMLError):
+            return {}
+
+    def save_settings(self):
+        settings = self.snapshot(SETTING_NAMES, writable_only=True)
+        if not settings:
+            raise ValueError('no camera running')
+        with open(self.settings_file, 'w') as f:
+            f.write('# Camera settings applied by pq_console after the cameras start.\n')
+            yaml.safe_dump(settings, f, sort_keys=True)
+        self.sessions.chown(self.settings_file)
+        return {k: len(v) for k, v in settings.items()}
+
+    def apply_startup_settings(self):
+        """After Start cameras: the saved settings, once the driver nodes answer."""
+        saved = self.saved_settings()
+        log = self.settings_log
+        if not saved:
+            return
+        for cam, params in saved.items():
+            node = f'/{cam}'
+            for _ in range(60):
+                if node in self.ros.topics_state()['nodes']:
+                    break
+                time.sleep(1)
+            else:
+                log.append(f'{cam}: driver not found, settings not applied')
+                continue
+            time.sleep(3)
+            done, failed = 0, []
+            for name, value in params.items():
+                try:
+                    type_, current = self.ros.get_param_typed(node, name)
+                    if current != value:
+                        self.ros.set_param(node, name, value, type_)
+                        done += 1
+                except Exception as e:   # noqa: B902 - reported in the page
+                    failed.append(f'{name} ({e})')
+            log.append(f'{time.strftime("%H:%M:%S")} {cam}: {done} settings applied' +
+                       (f', failed: {"; ".join(failed)}' if failed else ''))
+        self.emitter_cache['time'] = 0.0
+
+    def write_recording_settings(self, name):
+        """Settings of the cameras next to a recording (bags/<name>.camera_settings.yaml)."""
+        try:
+            settings = self.snapshot()
+            path = os.path.join(self.c.bags_dir, f'{name}.camera_settings.yaml')
+            with open(path, 'w') as f:
+                f.write(f'# Parameters of the camera drivers at the start of {name}.\n')
+                yaml.safe_dump(settings, f, sort_keys=True)
+            self.sessions.chown(path)
+        except Exception:   # noqa: B902 - the recording goes on without it
+            traceback.print_exc()
 
     # ---- actions (POST /api/<name>) ----
 
     def act(self, name, body):
         if name == 'cameras/start':
             self.sessions.start_cameras()
+            threading.Thread(target=self.apply_startup_settings, daemon=True).start()
         elif name == 'cameras/stop':
             self.sessions.stop_cameras()
         elif name == 'emitter':
-            value = int(body.get('value', 0))
-            self.ros.set_param(f"/{body['camera']}", EMITTER, value)
-            self.emitter_cache['time'] = 0.0
+            self.set_camera_param([body['camera']], EMITTER, int(body.get('value', 0)))
+        elif name == 'param':
+            cameras = body.get('cameras') or [body['camera']]
+            known = {c.name for c in self.c.cameras}
+            if not set(cameras) <= known:
+                raise ValueError(f'unknown camera in {cameras}')
+            return self.set_camera_param(cameras, body['name'], body['value'])
+        elif name == 'settings/save':
+            return self.save_settings()
         elif name == 'record/start':
             if self.c.cameras:
                 emitters = self.emitters(max_age=0)
@@ -100,12 +241,28 @@ class Console:
                                      f'{", ".join(unknown)}')
             self.sessions.start_recording(body.get('name', ''), bool(body.get('depth', True)),
                                           bool(body.get('aligned', False)))
+            threading.Thread(target=self.write_recording_settings, args=(body['name'],),
+                             daemon=True).start()
         elif name == 'record/stop':
             return {'name': self.sessions.stop_recording()}
         elif name == 'replay/start':
             self.ros.slam.reset()
             return {'name': self.sessions.start_replay(
                 body['bag'], body['profile'], body.get('rate', 1.0), bool(body.get('rerun', True)))}
+        elif name == 'view/start':
+            return {'name': self.sessions.start_view(body['bag'], body.get('rate', 1.0),
+                                                     bool(body.get('paused', False)))}
+        elif name == 'player':
+            job = self.sessions.job
+            if not job or job.state != 'running':
+                raise ValueError('no playback running')
+            if job.kind != 'view' and body['command'] in ('seek', 'pause'):
+                raise ValueError('pause and seek only when viewing a recording (not with SLAM)')
+            self.ros.player(body['command'], body.get('value'))
+            if body['command'] in ('pause', 'resume'):
+                job.meta['paused'] = body['command'] == 'pause'
+            elif body['command'] == 'rate':
+                job.meta['rate'] = float(body['value'])
         elif name == 'job/stop':
             self.sessions.stop_job()
         elif name == 'slam/reset':
@@ -156,6 +313,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(c.sessions.runs())
             if url.path == '/api/profiles':
                 return self.send_json(c.sessions.profiles())
+            if url.path == '/api/camera_settings':
+                return self.send_json(c.camera_settings())
             self.send_json({'error': 'not found'}, 404)
         except (BrokenPipeError, ConnectionResetError):
             pass

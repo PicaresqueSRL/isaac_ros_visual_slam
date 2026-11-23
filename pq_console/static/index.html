@@ -11,6 +11,7 @@
   <h1>pq console</h1>
   <nav>
     <button class="tab active" data-tab="live">Live</button>
+    <button class="tab" data-tab="cameras">Cameras</button>
     <button class="tab" data-tab="sessions">Sessions</button>
     <button class="tab" data-tab="graph">Nodes &amp; topics</button>
   </nav>
@@ -42,9 +43,24 @@
         <button id="rec-stop" class="danger">Stop recording</button>
       </div>
     </div>
-    <div class="card" id="job-card-live">
-      <h2>SLAM replay</h2>
+    <div class="card" id="playback">
+      <h2>Playback</h2>
+      <div class="form">
+        <select id="pb-bag"></select>
+        <label>rate <select id="pb-rate">
+          <option>0.25</option><option>0.5</option><option selected>1</option><option>2</option>
+        </select></label>
+      </div>
+      <div class="seek">
+        <input type="range" id="pb-seek" min="0" max="1" step="0.1" value="0" disabled>
+        <span id="pb-time" class="muted">0:00 / 0:00</span>
+      </div>
       <div id="job-live" class="muted">none</div>
+      <div class="actions">
+        <button id="pb-play">View</button>
+        <button id="pb-pause" class="secondary">Pause</button>
+        <button id="pb-stop" class="danger">Stop</button>
+      </div>
     </div>
   </div>
 
@@ -67,6 +83,26 @@
       <h3>Events</h3>
       <ul id="slam-events" class="events"></ul>
     </div>
+  </div>
+</section>
+
+<section id="tab-cameras" class="tab-body hidden">
+  <div class="card">
+    <h2>Camera settings</h2>
+    <div class="form">
+      <label><input type="checkbox" id="both" checked> apply to all cameras</label>
+      <button id="settings-reload" class="secondary">Reload</button>
+      <button id="settings-save">Save as startup settings</button>
+      <span id="settings-saved" class="muted"></span>
+    </div>
+    <p class="muted">Changes apply immediately. Streams and resolutions restart the stream (not
+      allowed while recording). Startup settings are applied after <i>Start cameras</i>; the
+      settings of each recording are saved next to it (<code>&lt;name&gt;.camera_settings.yaml</code>).</p>
+    <div id="settings"></div>
+    <details id="settings-more"><summary>Other driver parameters</summary>
+      <input id="settings-filter" placeholder="filter" size="24">
+      <div id="settings-other"></div>
+    </details>
   </div>
 </section>
 
