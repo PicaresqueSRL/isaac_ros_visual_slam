@@ -403,14 +403,16 @@ class Sessions:
         layout = ''
         if c.pylib_dir:
             layout = (f'python3 /tools/rerun_layout.py /rerun/{name}.mcap /rerun/{name}.rrd '
-                      f'--slam-bag /slam/{name}_slam --pylib /pylib >> /rerun/{name}.log 2>&1')
+                      f'--slam-bag /slam/{name}_slam --run-dir /runs/{name} --pylib /pylib '
+                      f'>> /rerun/{name}.log 2>&1')
         images = ','.join(f'/{cam}/{s}' for cam in ('cam2', 'cam1')
                           for s in ('infra1/image_rect_raw', 'color/image_raw'))
         pylib = ['-v', f'{c.pylib_dir}:/pylib:ro'] if c.pylib_dir else []
         bag_dir = os.path.dirname(path.rstrip('/'))
         _, image, args = self.version_args()   # pq_cuvslam messages (events) of the default build
         docker('run', '--rm', '--network', 'none', '-v', f'{c.rerun_dir}:/rerun',
-               '-v', f'{c.slam_bags_dir}:/slam:ro', '-v', f'{bag_dir}:{bag_dir}:ro',
+               '-v', f'{c.slam_bags_dir}:/slam:ro', '-v', f'{c.runs_dir}:/runs:ro',
+               '-v', f'{bag_dir}:{bag_dir}:ro',
                '-v', f'{c.tools_dir}:/tools:ro', *pylib, *args, '--entrypoint', 'bash', image, '-c',
                'source /opt/ros/lyrical/setup.bash; source /ws/install/setup.bash; rm -rf /tmp/o; '
                f'python3 /tools/to_rerun.py /slam/{name}_slam {shlex.quote(path)} /tmp/o '
