@@ -32,7 +32,7 @@ This file records every change made to it. Update it with each change.
 | Configuration | launch parameters + remappings + `static_transform_publisher` | YAML profiles (`profile`): cameras, topics, frames, IMU, depth, extrinsics with source, mode |
 | Modes | 0, 1, 2 | also 3 (Mono) and 4 (Multisensor, cuVSLAM >= 17 with cuNLS; optional depth and IMU) |
 | Launch files | Isaac Sim, RealSense, ZED, multi-camera, core | standalone node, `slam.launch.py profile:=...` |
-| Tools | none | `tools/` (bag analysis, benchmark, Rerun files) |
+| Tools | none | `tools/` (bag analysis, benchmark, Rerun files), `pq_console` (web console) |
 | Tests | integration tests on NVIDIA r2b bags | unit tests only (sequencer, vendored isaac_common) |
 
 ## Log
@@ -340,6 +340,18 @@ This file records every change made to it. Update it with each change.
   1.21 m, multicamera 4 IR 0.70 m, 4 IR + IMU 0.20 m (16 rejected frames), RGB-D of both
   cameras 0.42 m (none rejected, most loop closures), RGB-D + IMU 0.71 m; IR + RGB + depth + IMU
   drops a third of the frames on the Orin Nano (CPU image preparation).
+
+**pq_console** (`3fa60d3`, `f539157`, `84813af`, `6c640d8`, `da183b0`, `7470fb6`, `ceafcb9`, `88a536c`, `aad402c`)
+- Web console in a container next to the cameras or the bags, reached through an ssh tunnel
+  (`pq_console/connect.sh`); it drives the containers of the cameras, recorder, SLAM and player
+  through the Docker socket. Pages: Bags (folder browsing, content of a bag by camera, playback
+  of every stream, SLAM in real time with a profile or with the chosen sensors and cuVSLAM
+  build, trajectory with landmarks, runs), Cameras (USB devices, recording presets, live
+  streams, driver settings, settings saved with each recording), Rig 3D (cameras and sensors
+  in 3D, import of coordinates, overlap of the views, extrinsics for the built profiles),
+  Graph (nodes and topics).
+- Light on the Jetson: image and landmark topics are taken only when the page asks for them;
+  eight previews cost about 15 % of a PC core.
 
 ## Notes
 
