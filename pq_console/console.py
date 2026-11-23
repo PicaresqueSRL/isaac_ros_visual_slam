@@ -36,6 +36,7 @@ import time
 import traceback
 from urllib.parse import parse_qs, urlparse
 
+import bags as bags_mod
 import config as config_mod
 import ros_bridge
 import sessions as sessions_mod
@@ -211,6 +212,36 @@ class Console:
         except Exception:   # noqa: B902 - the recording goes on without it
             traceback.print_exc()
 
+    # ---- bags ----
+
+    def multisensor_ok(self, version):
+        """Multisensor needs cuVSLAM >= 17 (labels like 15.0.0; other labels: assumed ok)."""
+        label = self.sessions.version_args(version)[0]
+        major = label.split('.')[0]
+        return not major.isdigit() or int(major) >= 17
+
+    def bag(self, path, version=None):
+        info = bags_mod.bag_info(path, self.c.roots)
+        topics = set(info['topics'])
+        profiles = []
+        multisensor = self.multisensor_ok(version)
+        for p in self.sessions.profiles(version):
+            compat = bags_mod.compatibility(p.get('topics', []), topics)
+            if p['mode'] == 'multisensor' and not multisensor:
+                compat = {'ok': False, 'missing': ['cuVSLAM >= 17 (multisensor)']}
+            profiles.append({k: p[k] for k in ('name', 'mode', 'description')} | compat)
+        info['profiles'] = profiles
+        info['runs'] = [r for r in self.sessions.runs() if r['name'].startswith(info['name'] + '_')]
+        return info
+
+    def plan(self, path, selection, version=None):
+        """Profile for the sensors chosen on a bag (mode, notes, YAML)."""
+        info = bags_mod.bag_info(path, self.c.roots)
+        profile, notes = bags_mod.build_profile(info, selection)
+        if profile['mode'] == 'multisensor' and not self.multisensor_ok(version):
+            raise ValueError('these sensors need the multisensor mode: cuVSLAM >= 17')
+        return profile, notes
+
     # ---- actions (POST /api/<name>) ----
 
     def act(self, name, body):
@@ -245,12 +276,21 @@ class Console:
                              daemon=True).start()
         elif name == 'record/stop':
             return {'name': self.sessions.stop_recording()}
+        elif name == 'slam/plan':
+            profile, notes = self.plan(body['path'], body['selection'], body.get('version'))
+            return {'name': profile['name'], 'mode': profile['mode'], 'notes': notes,
+                    'yaml': bags_mod.profile_yaml(profile)}
         elif name == 'replay/start':
+            custom = None
+            if body.get('selection'):
+                custom, _ = self.plan(body['path'], body['selection'], body.get('version'))
             self.ros.slam.reset()
             return {'name': self.sessions.start_replay(
-                body['bag'], body['profile'], body.get('rate', 1.0), bool(body.get('rerun', True)))}
+                body['path'], body.get('profile'), custom, body.get('version'),
+                body.get('rate', 1.0), bool(body.get('rerun', True)))}
         elif name == 'view/start':
-            return {'name': self.sessions.start_view(body['bag'], body.get('rate', 1.0),
+            self.ros.slam.reset()
+            return {'name': self.sessions.start_view(body['path'], body.get('rate', 1.0),
                                                      bool(body.get('paused', False)))}
         elif name == 'player':
             job = self.sessions.job
@@ -299,20 +339,24 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_file(os.path.join(STATIC, 'index.html'))
             if url.path.startswith('/static/'):
                 return self.send_file(os.path.join(STATIC, os.path.basename(url.path)))
-            if url.path == '/stream':
-                return self.stream(q['topic'])
+            if url.path == '/snapshot':
+                return self.snapshot(q['topic'])
             if url.path == '/api/state':
                 return self.send_json(c.state())
             if url.path == '/api/topics':
                 return self.send_json(c.ros.topics_state())
             if url.path == '/api/slam':
                 return self.send_json(c.ros.slam.state(json.loads(q.get('since', '{}'))))
-            if url.path == '/api/recordings':
-                return self.send_json(c.sessions.recordings())
+            if url.path == '/api/browse':
+                return self.send_json(bags_mod.browse(q.get('path', ''), c.c.roots))
+            if url.path == '/api/bag':
+                return self.send_json(c.bag(q['path'], q.get('version')))
+            if url.path == '/api/versions':
+                return self.send_json(list(c.sessions.versions()))
             if url.path == '/api/runs':
                 return self.send_json(c.sessions.runs())
             if url.path == '/api/profiles':
-                return self.send_json(c.sessions.profiles())
+                return self.send_json(c.sessions.profiles(q.get('version')))
             if url.path == '/api/camera_settings':
                 return self.send_json(c.camera_settings())
             self.send_json({'error': 'not found'}, 404)
@@ -350,23 +394,25 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def stream(self, topic):
-        """MJPEG stream of an image topic (multipart/x-mixed-replace)."""
-        preview = self.console.ros.preview(topic)
+    def snapshot(self, topic):
+        """Latest preview JPEG of an image topic (the page asks for one every ~200 ms).
+
+        Short requests instead of MJPEG streams: browsers open at most 6 connections to a host,
+        and one long stream per image topic would block the other requests of the page.
+        """
+        jpeg = self.console.ros.preview(topic).latest()
+        if jpeg is None:
+            self.send_response(204)
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+            return
         self.send_response(200)
-        self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=frame')
+        self.send_header('Content-Type', 'image/jpeg')
+        self.send_header('Content-Length', str(len(jpeg)))
         self.send_header('Cache-Control', 'no-store')
-        self.send_header('Connection', 'close')
         self.end_headers()
-        self.close_connection = True
-        seq = -1
-        while True:
-            seq, jpeg = preview.wait(seq, timeout=5.0)
-            if jpeg is None:
-                continue
-            self.wfile.write(b'--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ' +
-                             str(len(jpeg)).encode() + b'\r\n\r\n' + jpeg + b'\r\n')
-            self.wfile.flush()
+        self.wfile.write(jpeg)
 
 
 def main():

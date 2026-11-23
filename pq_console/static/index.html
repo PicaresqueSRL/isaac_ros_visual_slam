@@ -10,17 +10,96 @@
 <header>
   <h1>pq console</h1>
   <nav>
-    <button class="tab active" data-tab="live">Live</button>
+    <button class="tab active" data-tab="bags">Bags</button>
     <button class="tab" data-tab="cameras">Cameras</button>
-    <button class="tab" data-tab="sessions">Sessions</button>
-    <button class="tab" data-tab="graph">Nodes &amp; topics</button>
+    <button class="tab" data-tab="rig">Rig 3D</button>
+    <button class="tab" data-tab="graph">Graph</button>
   </nav>
   <div id="status" class="status"></div>
 </header>
 <div id="error" class="error hidden"></div>
 
 <main>
-<section id="tab-live" class="tab-body">
+<!-- ================= Bags: browse, look at a bag, SLAM on it ================= -->
+<section id="tab-bags" class="tab-body">
+  <div class="split">
+    <aside class="card browser">
+      <h2>Bags</h2>
+      <div id="crumbs" class="crumbs"></div>
+      <ul id="entries" class="entries"></ul>
+    </aside>
+    <div class="main-col">
+      <div class="card" id="bag-card">
+        <div id="bag-summary" class="muted">Choose a bag (folder with metadata.yaml, .mcap or .db3).</div>
+      </div>
+
+      <div class="card" id="player-card">
+        <div class="player">
+          <button id="pb-play">Play</button>
+          <button id="pb-pause" class="secondary">Pause</button>
+          <button id="pb-stop" class="danger">Stop</button>
+          <label>rate <select id="pb-rate">
+            <option>0.25</option><option>0.5</option><option selected>1</option><option>2</option>
+          </select></label>
+          <input type="range" id="pb-seek" min="0" max="1" step="0.1" value="0" disabled>
+          <span id="pb-time" class="muted"></span>
+        </div>
+        <div id="job-line" class="muted"></div>
+      </div>
+
+      <div id="bag-previews" class="previews"></div>
+
+      <div class="card" id="slam-card">
+        <h2>SLAM on this bag</h2>
+        <div class="form">
+          <label><input type="radio" name="slam-src" value="profile" checked> profile</label>
+          <label><input type="radio" name="slam-src" value="sensors"> choose the sensors</label>
+          <label>cuVSLAM <select id="version"></select></label>
+          <label><input type="checkbox" id="rerun" checked> Rerun file</label>
+        </div>
+        <div id="slam-profile" class="slam-src">
+          <select id="profile"></select>
+          <div id="profile-desc" class="muted"></div>
+        </div>
+        <div id="slam-sensors" class="slam-src hidden">
+          <table id="sensors"></table>
+          <div id="plan" class="muted"></div>
+          <details><summary>profile</summary><pre id="plan-yaml"></pre></details>
+        </div>
+        <div class="actions">
+          <button id="slam-start">Run SLAM (real time)</button>
+          <button id="slam-stop" class="danger">Stop</button>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="card wide">
+          <h2>Trajectory <button id="slam-reset" class="small secondary">clear</button></h2>
+          <canvas id="traj" width="640" height="420"></canvas>
+          <div id="legend" class="legend"></div>
+        </div>
+        <div class="card">
+          <h2>Tracker</h2>
+          <div id="slam-diag" class="muted">no SLAM running</div>
+          <h3>Events</h3>
+          <ul id="slam-events" class="events"></ul>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>SLAM runs of this bag</h2>
+        <table id="runs"><thead><tr>
+          <th>Name</th><th>Mode</th><th>Frames</th><th>Path</th><th>Start-end</th><th>Rejected</th>
+          <th>Resets</th><th>Loop closures</th><th>track()</th><th>Rerun file</th>
+        </tr></thead><tbody></tbody></table>
+        <pre id="job-log"></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= Cameras: live view, recording, settings ================= -->
+<section id="tab-cameras" class="tab-body hidden">
   <div class="row">
     <div class="card">
       <h2>Cameras</h2>
@@ -43,50 +122,13 @@
         <button id="rec-stop" class="danger">Stop recording</button>
       </div>
     </div>
-    <div class="card" id="playback">
-      <h2>Playback</h2>
-      <div class="form">
-        <select id="pb-bag"></select>
-        <label>rate <select id="pb-rate">
-          <option>0.25</option><option>0.5</option><option selected>1</option><option>2</option>
-        </select></label>
-      </div>
-      <div class="seek">
-        <input type="range" id="pb-seek" min="0" max="1" step="0.1" value="0" disabled>
-        <span id="pb-time" class="muted">0:00 / 0:00</span>
-      </div>
-      <div id="job-live" class="muted">none</div>
-      <div class="actions">
-        <button id="pb-play">View</button>
-        <button id="pb-pause" class="secondary">Pause</button>
-        <button id="pb-stop" class="danger">Stop</button>
-      </div>
-    </div>
   </div>
-
-  <div class="grid">
+  <div class="grid" id="live-previews">
     <div class="preview" data-slot="0"></div>
     <div class="preview" data-slot="1"></div>
     <div class="preview" data-slot="2"></div>
     <div class="preview" data-slot="3"></div>
   </div>
-
-  <div class="row">
-    <div class="card wide">
-      <h2>SLAM <button id="slam-reset" class="small secondary">clear</button></h2>
-      <canvas id="traj" width="640" height="420"></canvas>
-      <div id="legend" class="legend"></div>
-    </div>
-    <div class="card">
-      <h2>Tracker</h2>
-      <div id="slam-diag" class="muted">no SLAM running</div>
-      <h3>Events</h3>
-      <ul id="slam-events" class="events"></ul>
-    </div>
-  </div>
-</section>
-
-<section id="tab-cameras" class="tab-body hidden">
   <div class="card">
     <h2>Camera settings</h2>
     <div class="form">
@@ -106,33 +148,13 @@
   </div>
 </section>
 
-<section id="tab-sessions" class="tab-body hidden">
-  <div class="card" id="job-card">
-    <h2>Job</h2>
-    <div id="job" class="muted">none</div>
-    <pre id="job-log"></pre>
-    <div class="actions"><button id="job-stop" class="danger">Stop</button></div>
-  </div>
-  <div class="card">
-    <h2>Recordings</h2>
-    <div class="form">
-      <label>SLAM profile <select id="profile"></select></label>
-      <label><input type="checkbox" id="rerun" checked> Rerun file</label>
-      <span id="profile-desc" class="muted"></span>
-    </div>
-    <table id="recordings"><thead><tr>
-      <th>Name</th><th>Date</th><th>Duration</th><th>Size</th><th>Cameras</th><th>Depth</th><th></th>
-    </tr></thead><tbody></tbody></table>
-  </div>
-  <div class="card">
-    <h2>SLAM runs</h2>
-    <table id="runs"><thead><tr>
-      <th>Name</th><th>Mode</th><th>Frames</th><th>Path</th><th>Start-end</th><th>Rejected</th>
-      <th>Resets</th><th>Loop closures</th><th>track()</th><th>Rerun file</th>
-    </tr></thead><tbody></tbody></table>
-  </div>
+<!-- ================= Rig 3D ================= -->
+<section id="tab-rig" class="tab-body hidden">
+  <div class="card"><h2>Rig 3D</h2><p class="muted">Next step: cameras in 3D, import of the
+    coordinates, camera models with their sensors.</p></div>
 </section>
 
+<!-- ================= Graph: nodes and topics ================= -->
 <section id="tab-graph" class="tab-body hidden">
   <div class="row">
     <div class="card">

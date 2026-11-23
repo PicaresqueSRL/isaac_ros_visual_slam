@@ -114,11 +114,10 @@ class Preview:
         self.width = width
         self.meter = Meter()
         self.jpeg = None
-        self.seq = 0
         self.info = {}
         self.last_decode = 0.0
         self.last_viewer = time.time()
-        self.cond = threading.Condition()
+        self.lock = threading.Lock()
         self.sub = None
 
     def on_message(self, data):
@@ -131,12 +130,10 @@ class Preview:
             jpeg, info = self.encode(data)
         except Exception as e:   # noqa: B902 - shown in the console
             jpeg, info = None, {'error': str(e)}
-        with self.cond:
+        with self.lock:
             if jpeg is not None:
                 self.jpeg = jpeg
-                self.seq += 1
             self.info = info
-            self.cond.notify_all()
 
     def encode(self, data):
         if self.compressed:
@@ -175,11 +172,10 @@ class Preview:
         ok, out = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 70])
         return (out.tobytes() if ok else None), info
 
-    def wait(self, after_seq, timeout=5.0):
-        with self.cond:
+    def latest(self):
+        with self.lock:
             self.last_viewer = time.time()
-            self.cond.wait_for(lambda: self.seq != after_seq, timeout)
-            return self.seq, self.jpeg
+            return self.jpeg
 
 
 class Slam:

@@ -32,7 +32,8 @@ class Config:
     listen_host: str = '127.0.0.1'
     listen_port: int = 8080
     data_dir: str = ''              # bags/, runs/, rerun/ (host path, mounted at the same path)
-    bags_dir: str = ''              # default data_dir/bags
+    bags_dir: str = ''              # recordings; default data_dir/bags
+    browse_roots: list = field(default_factory=list)   # folders with bags (read only)
     ros_domain_id: int = 7
     dds_transports: str = 'LARGE_DATA'
     camera_image: str = ''          # RealSense driver, recorder and player
@@ -40,6 +41,8 @@ class Config:
     gpu_args: list = field(default_factory=lambda: ['--runtime', 'nvidia'])
     slam_extra_args: list = field(default_factory=list)
     install_dir: str = ''           # pq_cuvslam install mounted over /ws/install (local build)
+    # cuVSLAM builds for the SLAM: {label: {image, install_dir}}; empty: slam_image/install_dir
+    cuvslam_versions: dict = field(default_factory=dict)
     tools_dir: str = ''             # tools/ of the repo (to_rerun.py, rerun_layout.py)
     pylib_dir: str = ''             # rerun-sdk folder for rerun_layout.py; empty: no .rrd
     dual_cam1_profile: str = 'cam1_stereo_imu'
@@ -55,6 +58,23 @@ class Config:
     @property
     def rerun_dir(self):
         return os.path.join(self.data_dir, 'rerun')
+
+    @property
+    def slam_bags_dir(self):
+        return os.path.join(self.data_dir, 'slam')
+
+    @property
+    def profiles_dir(self):
+        return os.path.join(self.data_dir, 'profiles')
+
+    @property
+    def roots(self):
+        """Folders the console may browse: recordings, SLAM output, configured roots."""
+        out = []
+        for r in [self.bags_dir, self.slam_bags_dir] + list(self.browse_roots):
+            if r and r not in out:
+                out.append(r)
+        return out
 
 
 def load(path):

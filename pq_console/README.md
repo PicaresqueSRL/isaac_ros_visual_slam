@@ -27,23 +27,31 @@ containers mount them at the same path.
 
 ## Pages
 
-- **Live**: cameras on/off, IR emitter of each camera (a recording does not start with an
-  emitter on, unless confirmed), recording with or without depth, four previews (any image
-  topic; fps, saturated pixels, valid depth), SLAM trajectory (top view), tracker state and
-  events of pq_cuvslam. *Playback*: a recording played without SLAM, to look at it (pause, rate,
-  seek; the cameras must be off).
-- **Cameras**: settings of the camera drivers side by side (streams, resolutions, IR emitter,
-  exposure, gain, RGB), changed at runtime on one or all cameras; *Save as startup settings*
-  writes `data_dir/camera_settings.yaml`, applied after *Start cameras*. The parameters of the
-  drivers at the start of each recording are saved in `bags/<name>.camera_settings.yaml`.
-- **Sessions**: recordings; *Play + SLAM* plays a recording in real time with the chosen
-  profile (the bag `<name>_aligned` from `tools/align_depth.py` is played with it), records the
-  SLAM output and builds the Rerun file; SLAM runs with their results.
-- **Nodes & topics**: ROS graph; rates on request.
+- **Bags**: browse the folders of the configuration (`bags_dir`, the SLAM output and
+  `browse_roots`) and open a bag (rosbag2 folder, `.mcap` or `.db3`). The page lists its
+  streams by camera (resolution, rate, distortion, IMU), the camera settings saved with it and
+  the other topics; *Play* shows every image stream (pause, rate, seek). *SLAM on this bag* plays
+  it in real time with pq_cuvslam, with a profile (the ones whose topics are in the bag) or with
+  the chosen sensors (IR stereo, RGB, depth per camera, one IMU: the console picks the cuVSLAM
+  mode and writes the profile), on the chosen cuVSLAM build; trajectory, tracker state and
+  events are shown live, the runs of the bag are listed with their Rerun file.
+- **Cameras**: cameras on/off, IR emitter of each camera (a recording does not start with an
+  emitter on, unless confirmed), recording with or without depth, four previews, settings of
+  the camera drivers side by side, changed at runtime on one or all cameras; *Save as startup
+  settings* writes `data_dir/camera_settings.yaml`, applied after *Start cameras*. The
+  parameters of the drivers at the start of each recording are saved in
+  `bags/<name>.camera_settings.yaml`.
+- **Rig 3D**: (next) cameras in 3D, coordinates import, camera models.
+- **Graph**: ROS nodes and topics; rates on request.
+
+cuVSLAM builds: `cuvslam_versions` in the configuration maps a label to an image and/or an
+install folder; profiles and sensors that need the Multisensor mode are refused below 17.
 
 ## How it works
 
-- `console.py`: HTTP server (Python standard library): page, JSON API, MJPEG previews.
+- `console.py`: HTTP server (Python standard library): page, JSON API, JPEG previews
+  (latest frame on request: browsers open at most 6 connections to a host).
+- `bags.py`: folder browsing, content of a bag, profiles for the chosen sensors.
 - `ros_bridge.py`: ROS node (graph, rates, previews, SLAM state, parameters of the camera
   drivers). Light by design: rates only on request, previews decoded at 5 fps and dropped
   10 s after the page stops showing them.

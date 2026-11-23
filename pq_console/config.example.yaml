@@ -3,6 +3,7 @@
 listen: 127.0.0.1:8080          # reached through an ssh tunnel (connect.sh)
 data_dir: /home/user/workspaces/pq_cuvslam/live   # bags/, runs/, rerun/
 # bags_dir: /home/user/bags     # recordings elsewhere (default data_dir/bags)
+browse_roots: []                 # more folders with bags, read only (e.g. [/home/user/bags])
 ros_domain_id: 7
 dds_transports: LARGE_DATA       # Fast DDS: large images between containers
 # RealSense driver, recorder and player (Jetson: the Isaac ROS realsense image)
@@ -11,6 +12,10 @@ slam_image: pq_cuvslam:dev
 gpu_args: [--runtime, nvidia]    # PC: [--gpus, all]
 slam_extra_args: []              # more docker run arguments of the SLAM containers
 # install_dir: /path/to/ws/install   # local pq_cuvslam build over /ws/install (console and SLAM)
+# cuVSLAM builds selectable for the SLAM (first = default); empty: slam_image / install_dir
+# cuvslam_versions:
+#   "17.0.1": {image: pq_cuvslam:dev}
+#   "15.0.0": {image: pq_cuvslam:v15}
 tools_dir: /home/user/workspaces/pq_cuvslam/isaac_ros_visual_slam/tools   # Rerun conversion
 pylib_dir: /home/user/workspaces/pq_cuvslam/pylib   # rerun-sdk (tools/rerun_layout.py); empty: no .rrd
 dual_cam1_profile: cam1_stereo_imu

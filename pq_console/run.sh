@@ -19,13 +19,28 @@ esac
 if docker ps -q --filter name=^pq_console$ | grep -q .; then
   echo "pq_console already running (run.sh restart to restart it)"; exit 0
 fi
-DATA=$(key data_dir); BAGS=$(key bags_dir); IMAGE=$(key slam_image); IMAGE=${IMAGE:-pq_cuvslam:dev}
-DOMAIN=$(key ros_domain_id); DDS=$(key dds_transports)
-[ -n "$DATA" ] || { echo "data_dir missing in $CONFIG"; exit 1; }
-mkdir -p "$DATA/bags" "$DATA/runs" "$DATA/rerun"
-VOLS=(-v "$DATA:$DATA")
-[ -n "$BAGS" ] && VOLS+=(-v "$BAGS:$BAGS")
-INSTALL=$(key install_dir); [ -n "$INSTALL" ] && VOLS+=(-v "$INSTALL:/ws/install:ro")
+IMAGE=$(key slam_image); IMAGE=${IMAGE:-pq_cuvslam:dev}
+# Folders of the configuration, mounted at the same path: "rw <path>" or "ro <path>".
+MOUNTS=$(docker run --rm --network none -v "$CONFIG:/c.yaml:ro" --entrypoint python3 "$IMAGE" -c '
+import os, yaml
+c = yaml.safe_load(open("/c.yaml")) or {}
+d = c.get("data_dir") or ""
+if not d: raise SystemExit("data_dir missing")
+print("rw", d); print("rw", c.get("bags_dir") or os.path.join(d, "bags"))
+for r in c.get("browse_roots") or []: print("ro", r)
+if c.get("install_dir"): print("install", c["install_dir"])
+print("domain", c.get("ros_domain_id", 7)); print("dds", c.get("dds_transports", "LARGE_DATA"))
+') || { echo "cannot read $CONFIG"; exit 1; }
+VOLS=(); DOMAIN=7; DDS=LARGE_DATA
+while read -r kind path; do
+  case $kind in
+    rw) mkdir -p "$path"; VOLS+=(-v "$path:$path") ;;
+    ro) [ -d "$path" ] && VOLS+=(-v "$path:$path:ro") ;;
+    install) VOLS+=(-v "$path:/ws/install:ro") ;;
+    domain) DOMAIN=$path ;;
+    dds) DDS=$path ;;
+  esac
+done <<< "$MOUNTS"
 docker rm -f pq_console > /dev/null 2>&1 || true
 docker run -d --name pq_console --network host --ipc host \
   -e ROS_DOMAIN_ID=${DOMAIN:-7} -e FASTDDS_BUILTIN_TRANSPORTS=${DDS:-LARGE_DATA} \

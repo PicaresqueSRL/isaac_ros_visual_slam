@@ -76,3 +76,30 @@ details summary { cursor: pointer; margin: 12px 0 6px; color: var(--muted); }
 #settings table, #settings-other table { table-layout: fixed; }
 #settings th:first-child, #settings-other th:first-child { width: 30%; }
 #settings th:last-child, #settings-other th:last-child { width: 14%; }
+/* bags */
+.split { display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); gap: 12px; align-items: start; }
+@media (max-width: 900px) { .split { grid-template-columns: 1fr; } }
+.browser { position: sticky; top: 56px; max-height: calc(100vh - 70px); overflow: auto; margin-bottom: 0; }
+.crumbs { font-size: 12px; margin-bottom: 6px; word-break: break-all; }
+.crumbs a { color: var(--accent); cursor: pointer; }
+ul.entries { list-style: none; padding: 0; margin: 0; font-size: 13px; }
+ul.entries li { padding: 4px 6px; border-radius: 4px; cursor: pointer; display: flex; gap: 6px; align-items: baseline; }
+ul.entries li:hover { background: var(--chip); }
+ul.entries li.selected { background: var(--chip); font-weight: 600; }
+ul.entries .icon { width: 1.2em; text-align: center; color: var(--muted); }
+ul.entries .meta { margin-left: auto; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.player { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.player input[type=range] { flex: 1; min-width: 160px; }
+.previews .cam-row { margin-bottom: 12px; }
+.previews .cam-row h3 { margin: 0 0 6px; }
+.previews .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.tile { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 6px; }
+.tile .frame { background: #000; aspect-ratio: 848 / 480; display: flex; align-items: center;
+  justify-content: center; border-radius: 4px; overflow: hidden; color: #888; font-size: 12px; }
+.tile img { max-width: 100%; max-height: 100%; }
+.tile .label { font-size: 12px; display: flex; justify-content: space-between; gap: 6px; margin-bottom: 4px; }
+.tile .info { font-size: 11px; color: var(--muted); margin-top: 3px; min-height: 1.3em; }
+.slam-src { margin-top: 8px; }
+#sensors td, #sensors th { text-align: center; }
+#sensors td:first-child, #sensors th:first-child { text-align: left; }
+.badge { font-size: 11px; padding: 0 6px; border-radius: 8px; background: var(--chip); color: var(--muted); }

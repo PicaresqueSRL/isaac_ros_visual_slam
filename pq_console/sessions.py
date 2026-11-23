@@ -33,7 +33,7 @@ import subprocess
 import threading
 import time
 
-import yaml
+import bags as bags_mod
 
 NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,80}$')
 PROFILES_DIR = '/ws/install/pq_cuvslam/share/pq_cuvslam/profiles'
@@ -98,16 +98,11 @@ class Sessions:
         self.lock = threading.Lock()
         self.job = None
         self.recording = None   # {'name', 'started', 'depth'}
-        for d in (self.c.bags_dir, self.c.runs_dir, self.c.rerun_dir):
+        for d in (self.c.bags_dir, self.c.runs_dir, self.c.rerun_dir, self.c.slam_bags_dir):
             os.makedirs(d, exist_ok=True)
         if running('pq_rec'):
             self.recording = {'name': '(started outside the console)', 'started': None,
                               'depth': None}
-
-    def slam_args(self):
-        """Arguments of the containers of the SLAM image (local build, extra arguments)."""
-        install = ['-v', f'{self.c.install_dir}:/ws/install:ro'] if self.c.install_dir else []
-        return install + list(self.c.slam_extra_args)
 
     # Common container arguments: host network and IPC (DDS shared memory between containers).
     def ros_args(self):
@@ -223,70 +218,60 @@ class Sessions:
         self.chown(self.c.bags_dir)
         return name
 
-    # ---- SLAM replay ----
+    # ---- bags: view and SLAM replay ----
 
-    def start_replay(self, bag, profile, rate=1.0, rerun=True):
-        with self.lock:
-            if self.job and self.job.state == 'running':
-                raise ValueError(f'{self.job.kind} {self.job.name} is running')
-            if self.recording or self.cameras_running():
-                raise ValueError('stop the cameras first: the bag uses the same topics')
-            if not os.path.isfile(os.path.join(self.c.bags_dir, bag, 'metadata.yaml')):
-                raise ValueError(f'no recording {bag}')
-            if profile not in self.profile_names():
-                raise ValueError(f'no profile {profile}')
-            job = Job('replay', f'{bag}_{profile}')
-            job.meta = self.bag_info(bag)
-            job.meta.update(rate=float(rate), profile=profile)
-            self.job = job
-        threading.Thread(target=self._replay, args=(job, bag, profile, float(rate), rerun),
-                         daemon=True).start()
-        return job.name
+    def check_bag(self, path):
+        if not bags_mod.inside(path, self.c.roots) or not os.path.exists(path):
+            raise ValueError(f'{path}: not a bag of the console folders')
 
-    def bag_info(self, bag):
-        """Start (s, receive time) and duration of a recording, from its metadata."""
-        with open(os.path.join(self.c.bags_dir, bag, 'metadata.yaml')) as f:
-            info = yaml.safe_load(f)['rosbag2_bagfile_information']
-        return {'bag': bag,
-                'start': info['starting_time']['nanoseconds_since_epoch'] / 1e9,
-                'duration_s': info['duration']['nanoseconds'] / 1e9}
+    def check_idle(self):
+        if self.job and self.job.state == 'running':
+            raise ValueError(f'{self.job.kind} {self.job.name} is running')
+        if self.recording or self.cameras_running():
+            raise ValueError('stop the cameras first: the bag uses the same topics')
 
-    def play_inputs(self, bag):
-        inputs = f'-i /bags/{bag}'
-        if os.path.isfile(os.path.join(self.c.bags_dir, f'{bag}_aligned', 'metadata.yaml')):
-            inputs += f' -i /bags/{bag}_aligned'
-        return inputs
+    @staticmethod
+    def bag_meta(path):
+        """Name, start (s, receive time) and duration of a bag."""
+        import rosbag2_py
+        m = rosbag2_py.Info().read_metadata(path, '')
+        return {'bag': bags_mod.bag_name(path), 'path': path,
+                'start': m.starting_time.nanoseconds / 1e9, 'duration_s': m.duration.nanoseconds / 1e9}
 
-    def play_args(self, inputs, rate, extra=''):
+    def play_args(self, path, rate, extra=''):
         """Player container (image of the cameras: it knows the RealSense metadata messages)."""
-        return ['run', '--rm', '--name', 'pq_play', *self.ros_args(), '-v', f'{self.c.bags_dir}:/bags:ro',
+        paths = [path]
+        aligned = bags_mod.sidecar(path, '_aligned')
+        if bags_mod.is_bag_dir(aligned):
+            paths.append(aligned)   # depth aligned to the RGB (tools/align_depth.py)
+        mounts = []
+        for d in sorted({os.path.dirname(x.rstrip('/')) for x in paths}):
+            mounts += ['-v', f'{d}:{d}:ro']
+        inputs = ' '.join(f'-i {shlex.quote(x)}' for x in paths)
+        return ['run', '--rm', '--name', 'pq_play', *self.ros_args(), *mounts,
                 '--entrypoint', 'bash', self.c.camera_image or self.c.slam_image, '-c',
                 f'source /opt/ros/lyrical/setup.bash; ros2 bag play {inputs} --rate {rate} {extra} '
                 '> /dev/null 2>&1']
 
-    def start_view(self, bag, rate=1.0, paused=False):
-        """Play a recording without SLAM, to look at it (pause, rate and seek via the player)."""
+    def start_view(self, path, rate=1.0, paused=False):
+        """Play a bag without SLAM, to look at it (pause, rate and seek via the player)."""
         with self.lock:
-            if self.job and self.job.state == 'running':
-                raise ValueError(f'{self.job.kind} {self.job.name} is running')
-            if self.recording or self.cameras_running():
-                raise ValueError('stop the cameras first: the bag uses the same topics')
-            if not os.path.isfile(os.path.join(self.c.bags_dir, bag, 'metadata.yaml')):
-                raise ValueError(f'no recording {bag}')
-            job = Job('view', bag)
-            job.meta = self.bag_info(bag)
+            self.check_idle()
+            self.check_bag(path)
+            job = Job('view', bags_mod.bag_name(path))
+            job.meta = self.bag_meta(path)
             job.meta.update(rate=float(rate), paused=bool(paused))
             self.job = job
-        threading.Thread(target=self._view, args=(job, bag, float(rate), paused), daemon=True).start()
+        threading.Thread(target=self._view, args=(job, path, float(rate), paused), daemon=True).start()
         return job.name
 
-    def _view(self, job, bag, rate, paused):
+    def _view(self, job, path, rate, paused):
         try:
             docker('rm', '-f', 'pq_play')
-            job.info(f'play {bag} at rate {rate}')
+            job.info(f'play {path} at rate {rate}')
             # /clock at 10 Hz: position of the playback for the console.
             extra = '--clock 10' + (' --start-paused' if paused else '')
-            docker(*self.play_args(self.play_inputs(bag), rate, extra), timeout=24 * 3600)
+            docker(*self.play_args(path, rate, extra), timeout=24 * 3600)
             job.state = 'stopped' if job.stop_event.is_set() else 'done'
         except Exception as e:   # noqa: B902 - shown in the console
             job.info(f'error: {e}')
@@ -299,31 +284,77 @@ class Sessions:
             self.job.stop_event.set()
             docker('rm', '-f', 'pq_play')
 
-    def _replay(self, job, bag, profile, rate, rerun):
+    def versions(self):
+        """cuVSLAM builds: {label: {'image', 'install_dir'}}; the first one is the default."""
+        return self.c.cuvslam_versions or {
+            'default': {'image': self.c.slam_image, 'install_dir': self.c.install_dir}}
+
+    def version_args(self, version=None):
+        """Image and docker arguments of a cuVSLAM build."""
+        versions = self.versions()
+        label = version or next(iter(versions))
+        if label not in versions:
+            raise ValueError(f'unknown cuVSLAM version {label}')
+        v = versions[label]
+        install = ['-v', f"{v['install_dir']}:/ws/install:ro"] if v.get('install_dir') else []
+        return label, v.get('image') or self.c.slam_image, install + list(self.c.slam_extra_args)
+
+    def start_replay(self, path, profile=None, custom=None, version=None, rate=1.0, rerun=True):
+        """
+        SLAM on a bag played in real time, as live.
+
+        profile: name of an installed profile or 'dual'; custom: profile dict built by the console.
+        """
+        with self.lock:
+            self.check_idle()
+            self.check_bag(path)
+            label, _, _ = self.version_args(version)
+            if custom:
+                profile = custom['name']
+            elif profile not in self.profile_names(label):
+                raise ValueError(f'no profile {profile} in cuVSLAM {label}')
+            name = bags_mod.safe_name(f'{bags_mod.bag_name(path)}_{profile}' +
+                                      ('' if label == next(iter(self.versions())) else f'_{label}'))
+            job = Job('replay', name)
+            job.meta = self.bag_meta(path)
+            job.meta.update(rate=float(rate), profile=profile, version=label)
+            self.job = job
+        threading.Thread(target=self._replay, args=(job, path, profile, custom, label, float(rate),
+                                                    rerun), daemon=True).start()
+        return job.name
+
+    def _replay(self, job, path, profile, custom, version, rate, rerun):
         c, name = self.c, job.name
         try:
             for n in ('pq_slam', 'pq_slamrec', 'pq_play'):
                 docker('rm', '-f', n)
-            if profile == 'dual':
+            _, image, args = self.version_args(version)
+            if custom:
+                os.makedirs(c.profiles_dir, exist_ok=True)
+                with open(os.path.join(c.profiles_dir, f'{profile}.yaml'), 'w') as f:
+                    f.write('# Profile built by pq_console for a bag.\n' + bags_mod.profile_yaml(custom))
+                args += ['-v', f'{c.profiles_dir}:/console_profiles:ro']
+                launch = (f'slam.launch.py profile:=/console_profiles/{profile}.yaml '
+                          f'run_output_dir:=/out/{name} enable_vis:=true')
+            elif profile == 'dual':
                 launch = (f'dual_vio.launch.py cam1_profile:={c.dual_cam1_profile} '
                           f'run_output_dir:=/out/{name} enable_vis:=true')
             else:
                 launch = f'slam.launch.py profile:={profile} run_output_dir:=/out/{name} enable_vis:=true'
-            shutil.rmtree(os.path.join(c.runs_dir, name), ignore_errors=True)
-            job.info(f'SLAM {profile}')
+            self.chown_rm(os.path.join(c.runs_dir, name))
+            job.info(f'SLAM {profile} (cuVSLAM {version})')
             code, out = docker(
-                'run', '-d', '--name', 'pq_slam', *c.gpu_args, *self.ros_args(), *self.slam_args(),
-                '-v', f'{c.runs_dir}:/out', '--entrypoint', 'bash', c.slam_image, '-c',
+                'run', '-d', '--name', 'pq_slam', *c.gpu_args, *self.ros_args(), *args,
+                '-v', f'{c.runs_dir}:/out', '--entrypoint', 'bash', image, '-c',
                 'source /opt/ros/lyrical/setup.bash; source /ws/install/setup.bash; '
                 f'exec ros2 launch pq_cuvslam {launch} > /out/{name}.log 2>&1')
             if code:
                 raise RuntimeError(out)
-            slam_bag = os.path.join(c.bags_dir, f'{name}_slam')
-            self.chown_rm(slam_bag)
+            os.makedirs(c.slam_bags_dir, exist_ok=True)
+            self.chown_rm(os.path.join(c.slam_bags_dir, f'{name}_slam'))
             code, out = docker(
-                'run', '-d', '--name', 'pq_slamrec', *self.ros_args(), *self.slam_args(),
-                '-v', f'{c.bags_dir}:/out',
-                '--entrypoint', 'bash', c.slam_image, '-c',
+                'run', '-d', '--name', 'pq_slamrec', *self.ros_args(), *args,
+                '-v', f'{c.slam_bags_dir}:/out', '--entrypoint', 'bash', image, '-c',
                 'source /opt/ros/lyrical/setup.bash; source /ws/install/setup.bash; '
                 'exec ros2 bag record -s mcap --storage-preset-profile zstd_fast '
                 f"--include-unpublished-topics -o /out/{name}_slam --regex '{SLAM_TOPICS_RE}' "
@@ -331,9 +362,9 @@ class Sessions:
             if code:
                 raise RuntimeError(out)
             time.sleep(8)   # nodes active and recorder subscribed before the first frame
-            job.info(f'play {bag} at rate {rate}')
+            job.info(f'play {path} at rate {rate}')
             if not job.stop_event.is_set():
-                docker(*self.play_args(self.play_inputs(bag), rate), timeout=24 * 3600)
+                docker(*self.play_args(path, rate), timeout=24 * 3600)
             job.info('play finished, stopping the SLAM')
             time.sleep(3)
             docker('exec', 'pq_slamrec', 'bash', '-c', 'pkill -INT -f "bag record"')
@@ -349,10 +380,12 @@ class Sessions:
             if run:
                 keys = ('frames', 'path_m', 'start_end_m')
                 job.info('run: ' + ', '.join(f'{k} {run[k]}' for k in keys if k in run))
+            else:
+                job.info(f'no run output: see {c.runs_dir}/{name}.log')
             if rerun and not job.stop_event.is_set() and c.tools_dir:
                 job.info('Rerun conversion')
-                self._rerun(name, bag)
-            self.chown(c.runs_dir, c.bags_dir, c.rerun_dir)
+                self._rerun(name, path)
+            self.chown(c.runs_dir, c.slam_bags_dir, c.rerun_dir)
             job.state = 'stopped' if job.stop_event.is_set() else 'done'
         except Exception as e:   # noqa: B902 - shown in the console
             job.info(f'error: {e}')
@@ -365,77 +398,61 @@ class Sessions:
             docker('run', '--rm', '-v', f'{os.path.dirname(path)}:/d', '--entrypoint', 'rm',
                    self.c.slam_image, '-rf', f'/d/{os.path.basename(path)}')
 
-    def _rerun(self, name, bag):
+    def _rerun(self, name, path):
         c = self.c
         layout = ''
         if c.pylib_dir:
-            layout = (f'python3 /tools/rerun_layout.py /live/rerun/{name}.mcap '
-                      f'/live/rerun/{name}.rrd --pylib /pylib >> /live/rerun/{name}.log 2>&1')
+            layout = (f'python3 /tools/rerun_layout.py /rerun/{name}.mcap '
+                      f'/rerun/{name}.rrd --pylib /pylib >> /rerun/{name}.log 2>&1')
         images = ','.join(f'/{cam}/{s}' for cam in ('cam2', 'cam1')
                           for s in ('infra1/image_rect_raw', 'color/image_raw'))
         pylib = ['-v', f'{c.pylib_dir}:/pylib:ro'] if c.pylib_dir else []
-        docker('run', '--rm', '--network', 'none', '-v', f'{c.data_dir}:/live',
-               '-v', f'{c.bags_dir}:/live/bags', '-v', f'{c.tools_dir}:/tools:ro', *pylib,
-               '--entrypoint', 'bash', c.slam_image, '-c',
-               'source /opt/ros/lyrical/setup.bash; mkdir -p /live/rerun; rm -rf /tmp/o; '
-               f'python3 /tools/to_rerun.py /live/bags/{name}_slam /live/bags/{bag} /tmp/o '
-               f'--max-image-rate 15 --images {images} > /live/rerun/{name}.log 2>&1 '
-               f'&& cp /tmp/o/*.mcap /live/rerun/{name}.mcap; {layout}', timeout=3 * 3600)
+        bag_dir = os.path.dirname(path.rstrip('/'))
+        docker('run', '--rm', '--network', 'none', '-v', f'{c.rerun_dir}:/rerun',
+               '-v', f'{c.slam_bags_dir}:/slam:ro', '-v', f'{bag_dir}:{bag_dir}:ro',
+               '-v', f'{c.tools_dir}:/tools:ro', *pylib, '--entrypoint', 'bash', c.slam_image, '-c',
+               'source /opt/ros/lyrical/setup.bash; rm -rf /tmp/o; '
+               f'python3 /tools/to_rerun.py /slam/{name}_slam {shlex.quote(path)} /tmp/o '
+               f'--max-image-rate 15 --images {images} > /rerun/{name}.log 2>&1 '
+               f'&& cp /tmp/o/*.mcap /rerun/{name}.mcap; {layout}', timeout=3 * 3600)
 
     # ---- lists ----
 
-    def profiles(self, max_age=60.0):
-        """Profiles installed in the SLAM image (as the SLAM container sees them), plus dual."""
-        cache = getattr(self, '_profiles', None)
+    def profiles(self, version=None, max_age=60.0):
+        """Profiles installed in a cuVSLAM build (as its SLAM container sees them), plus dual."""
+        label, image, args = self.version_args(version)
+        self._profiles = getattr(self, '_profiles', {})
+        cache = self._profiles.get(label)
         if cache and time.time() - cache[0] < max_age:
             return cache[1]
         script = ('import glob, json, os, yaml\n'
                   f'out = []\nfor p in sorted(glob.glob("{PROFILES_DIR}/*.yaml")):\n'
                   '    try:\n        y = yaml.safe_load(open(p))\n    except Exception:\n        y = {}\n'
                   '    out.append({"name": os.path.splitext(os.path.basename(p))[0], '
-                  '"mode": y.get("mode", ""), "description": y.get("description", "")})\n'
+                  '"mode": y.get("mode", ""), "description": y.get("description", ""), '
+                  '"profile": y})\n'
                   'print(json.dumps(out))')
-        code, out = docker('run', '--rm', '--network', 'none', *self.slam_args(),
-                           '--entrypoint', 'python3', self.c.slam_image, '-c', script)
+        code, out = docker('run', '--rm', '--network', 'none', *args,
+                           '--entrypoint', 'python3', image, '-c', script)
         found = []
         if code == 0:
             try:
                 found = json.loads(out.splitlines()[-1])
             except (ValueError, IndexError):
                 pass
-        result = [{'name': 'dual', 'mode': 'dual VIO',
-                   'description': 'cam1 and cam2 VIO in parallel with the odometry selector'}] + found
-        self._profiles = (time.time(), result)
+        for p in found:
+            p['topics'] = sorted(bags_mod.profile_topics(p.pop('profile') or {}))
+        dual = {'name': 'dual', 'mode': 'dual VIO',
+                'description': 'cam1 and cam2 VIO in parallel with the odometry selector',
+                'topics': sorted({f'/{cam}/{s}' for cam in ('cam1', 'cam2') for s in (
+                    'infra1/image_rect_raw', 'infra1/camera_info', 'infra2/image_rect_raw',
+                    'infra2/camera_info', 'imu')})}
+        result = [dual] + found
+        self._profiles[label] = (time.time(), result)
         return result
 
-    def profile_names(self):
-        return [p['name'] for p in self.profiles()]
-
-    def recordings(self):
-        out = []
-        for meta in sorted(glob.glob(os.path.join(self.c.bags_dir, '*', 'metadata.yaml'))):
-            path = os.path.dirname(meta)
-            name = os.path.basename(path)
-            if name.endswith(('_slam', '_aligned')):
-                continue
-            try:
-                with open(meta) as f:
-                    info = yaml.safe_load(f)['rosbag2_bagfile_information']
-            except (OSError, yaml.YAMLError, KeyError, TypeError):
-                continue
-            topics = [t['topic_metadata']['name'] for t in info.get('topics_with_message_count', [])]
-            start = info.get('starting_time', {}).get('nanoseconds_since_epoch', 0)
-            out.append({
-                'name': name,
-                'start': start / 1e9,
-                'duration_s': info.get('duration', {}).get('nanoseconds', 0) / 1e9,
-                'size': dir_size(path),
-                'cameras': sorted({t.split('/')[1] for t in topics if t.count('/') > 1}),
-                'depth': any(t.endswith('/depth/image_rect_raw') for t in topics),
-                'aligned': any('aligned_depth_to_color/image_raw' in t for t in topics) or
-                os.path.isfile(os.path.join(self.c.bags_dir, f'{name}_aligned', 'metadata.yaml')),
-            })
-        return sorted(out, key=lambda r: r['start'], reverse=True)
+    def profile_names(self, version=None):
+        return [p['name'] for p in self.profiles(version)]
 
     def run_summary(self, path):
         try:
