@@ -92,7 +92,9 @@ ul.entries .meta { margin-left: auto; font-size: 11px; color: var(--muted); whit
 .player input[type=range] { flex: 1; min-width: 160px; }
 .previews .cam-row { margin-bottom: 12px; }
 .previews .cam-row h3 { margin: 0 0 6px; }
-.previews .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.previews .tiles { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+.previews .tile { width: calc(25% - 8px); min-width: 190px; max-width: 320px; }
+.previews .cam-row h3 { text-align: center; }
 .tile { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 6px; }
 .tile .frame { background: #000; aspect-ratio: 848 / 480; display: flex; align-items: center;
   justify-content: center; border-radius: 4px; overflow: hidden; color: #888; font-size: 12px; }
@@ -119,3 +121,24 @@ summary.card-title { font-weight: 600; font-size: 14px; color: var(--text); marg
 .small-text { font-size: 12px; }
 label.file input { font-size: 12px; max-width: 200px; }
 #graph { height: 62vh; min-height: 360px; border-radius: 6px; background: var(--bg); margin-top: 8px; }
+/* player */
+.seekrow { display: flex; align-items: center; gap: 10px; }
+.seekrow input[type=range] { flex: 1; accent-color: var(--accent); }
+.seekrow .time { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); min-width: 3.2em; text-align: center; }
+.transport { display: grid; grid-template-columns: 1fr auto auto 1fr; align-items: center; gap: 14px; margin-top: 8px; }
+.transport .side:last-child { justify-self: start; }
+button.round { width: 40px; height: 40px; border-radius: 50%; padding: 0; display: inline-flex; align-items: center;
+  justify-content: center; background: var(--chip); border: 1px solid var(--border); color: var(--text); }
+button.round svg { width: 18px; height: 18px; fill: currentColor; }
+button.round.big { width: 52px; height: 52px; background: var(--accent); border-color: var(--accent); color: #fff; }
+button.round.big svg { width: 24px; height: 24px; }
+button.round .i-pause { display: none; }
+button.round.playing .i-play { display: none; }
+button.round.playing .i-pause { display: inline; }
+.center { text-align: center; margin-top: 6px; }
+/* SLAM 3D */
+#slam3d { position: relative; height: 480px; border-radius: 6px; overflow: hidden; background: var(--bg); }
+.seg { display: inline-flex; }
+.seg button { border-radius: 0; }
+.seg button:first-child { border-radius: 6px 0 0 6px; }
+.seg button:last-child { border-radius: 0 6px 6px 0; }

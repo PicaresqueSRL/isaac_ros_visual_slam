@@ -207,11 +207,14 @@ function renderBag() {
     <div class="form" style="margin:6px 0">${chip(fmtDate(b.start))}${chip('duration ' + fmtDur(b.duration_s))}
       ${chip(fmtBytes(b.size))}${chip(b.messages + ' messages')}
       ${b.aligned_bag ? chip('+ aligned depth bag') : ''}</div>
+    <details id="bag-streams" ${load('bag_streams_open', true) ? 'open' : ''}>
+      <summary>streams (${Object.values(b.cameras).reduce((n, c) => n + c.streams.length + (c.imu ? 1 : 0), 0)})</summary>
     <table><thead><tr><th>Camera</th><th>Stream</th><th>Topic</th><th class="num">Resolution</th>
       <th class="num">Rate</th><th class="num">Messages</th><th>Distortion</th></tr></thead><tbody>${camRows ||
-      '<tr><td colspan="7" class="muted">no camera streams</td></tr>'}</tbody></table>
+      '<tr><td colspan="7" class="muted">no camera streams</td></tr>'}</tbody></table></details>
     ${others ? `<details><summary>other topics (${b.others.length})</summary><table>${others}</table></details>` : ''}
     ${settings}`;
+  $('bag-streams').ontoggle = () => save('bag_streams_open', $('bag-streams').open);
 }
 
 // Previews of all the image streams of the bag, one row per camera.
@@ -246,17 +249,20 @@ function renderJob() {
   const mine = running && bag && m.path === bag.path;
   const view = mine && j.kind === 'view';
   const busy = running || state.cameras_running || !!state.recording;
-  $('pb-play').disabled = busy || !bag;
+  // One play/pause button: starts the view of the bag, then pauses and resumes it.
+  const playing = view && !m.paused;
+  $('pb-play').disabled = view ? false : busy || !bag;
+  $('pb-play').classList.toggle('playing', playing || (mine && j.kind === 'replay'));
+  $('pb-play').title = playing ? 'Pause' : view ? 'Resume' : 'Play';
   $('pb-stop').disabled = !running;
-  $('pb-pause').disabled = !view;
-  $('pb-pause').textContent = view && m.paused ? 'Resume' : 'Pause';
   $('pb-seek').disabled = !view;
   if (mine && m.rate) $('pb-rate').value = String(m.rate);
-  const dur = mine ? m.duration_s || 0 : 0;
+  const dur = mine ? m.duration_s || 0 : bag ? bag.duration_s : 0;
   const pos = mine && state.clock && m.start ? Math.min(Math.max(state.clock - m.start, 0), dur) : 0;
   $('pb-seek').max = Math.max(dur, 0.1);
   if (!seeking) $('pb-seek').value = pos;
-  $('pb-time').textContent = view ? `${fmtDur(pos)} / ${fmtDur(dur)}` : '';
+  $('pb-pos').textContent = fmtDur(pos);
+  $('pb-dur').textContent = fmtDur(dur);
   const last = j && j.log.length ? j.log[j.log.length - 1].slice(9) : '';
   $('job-line').textContent = !j ? (state.cameras_running ? 'cameras running: stop them to play a bag' : '')
     : `${j.kind === 'view' ? 'view' : 'SLAM'} ${j.name}: ${j.state}` +
@@ -268,9 +274,15 @@ function renderJob() {
   lastJobState = j ? j.state : null;
   renderBagPreviews();
 }
-$('pb-play').onclick = () => post('view/start', { path: bag.path, rate: +$('pb-rate').value })
-  .then(() => { slam = { generation: null, paths: {}, since: {}, landmarks: {} }; refreshState(); });
-$('pb-pause').onclick = () => post('player', { command: state.job.meta.paused ? 'resume' : 'pause' }).then(refreshState);
+$('pb-play').onclick = () => {
+  const j = state && state.job;
+  if (j && j.state === 'running' && j.kind === 'view') {
+    post('player', { command: j.meta.paused ? 'resume' : 'pause' }).then(refreshState);
+  } else {
+    post('view/start', { path: bag.path, rate: +$('pb-rate').value })
+      .then(() => { slam = { generation: null, paths: {}, since: {}, landmarks: {} }; refreshState(); });
+  }
+};
 $('pb-stop').onclick = () => post('job/stop').then(refreshState);
 $('pb-rate').onchange = () => {
   if (state && state.job && state.job.state === 'running') post('player', { command: 'rate', value: +$('pb-rate').value });
@@ -382,13 +394,34 @@ async function refreshSlam() {
   try { s = await get(q('/api/slam', { since: JSON.stringify(slam.since), landmarks: JSON.stringify(have) })); } catch (e) { return; }
   if (s.generation !== slam.generation) slam = { generation: s.generation, paths: {}, since: {}, landmarks: {} };
   Object.assign(slam.landmarks, s.landmarks || {});
+  slam.loop_closures = s.loop_closures || [];
   for (const [topic, pts] of Object.entries(s.paths)) {
     const path = slam.paths[topic] || (slam.paths[topic] = []);
     path.push(...pts);
     if (path.length) slam.since[topic] = path[path.length - 1][0];
   }
-  drawTrajectory();
+  const in3d = window.slam3d && window.slam3d.available;
+  if (in3d) window.slam3d.update(slam);
+  if (window.slam3d && !window.slam3d.available) {   // no WebGL: top view on a canvas
+    $('slam3d').classList.add('hidden');
+    $('traj').classList.remove('hidden');
+    drawTrajectory();
+  }
+  renderLegend();
   renderDiag(s);
+}
+
+function renderLegend() {
+  const items = Object.entries(slam.paths).filter(([, p]) => p.length).map(([topic, p], i) => {
+    let len = 0;
+    for (let k = 1; k < p.length; k++) len += Math.hypot(p[k][1] - p[k - 1][1], p[k][2] - p[k - 1][2], p[k][3] - p[k - 1][3]);
+    return `<span style="--c:${COLORS[i % COLORS.length]}">${esc(topic)} · ${len.toFixed(1)} m</span>`;
+  });
+  for (const [topic, l] of Object.entries(slam.landmarks)) {
+    items.push(`<span style="--c:#7c8796">${esc(topic.replace('/vis/landmarks_cloud', ''))} landmarks · ${l.xy.length / 3}</span>`);
+  }
+  if ((slam.loop_closures || []).length) items.push(`<span style="--c:#ffc800">loop closures · ${slam.loop_closures.length}</span>`);
+  $('legend').innerHTML = items.join('');
 }
 $('slam-reset').onclick = () => post('slam/reset').then(refreshSlam);
 
@@ -412,7 +445,7 @@ function drawTrajectory() {
   let minx = Infinity, maxx = -Infinity, miny = Infinity, maxy = -Infinity;
   const grow = (x, y) => { minx = Math.min(minx, x); maxx = Math.max(maxx, x); miny = Math.min(miny, y); maxy = Math.max(maxy, y); };
   for (const [, p] of entries) for (const v of p) grow(v[1], v[2]);
-  if (!entries.length) for (const [, l] of clouds) for (let k = 0; k < l.xy.length; k += 2) grow(l.xy[k], l.xy[k + 1]);
+  if (!entries.length) for (const [, l] of clouds) for (let k = 0; k < l.xy.length; k += 3) grow(l.xy[k], l.xy[k + 1]);
   const span = Math.max(maxx - minx, maxy - miny, 2) * 1.1;
   const scale = Math.min(W, H) / span;
   const cx = (minx + maxx) / 2, cy = (miny + maxy) / 2;
@@ -426,13 +459,11 @@ function drawTrajectory() {
   for (let g = Math.floor((cy - H / 2 / scale) / step) * step; g < cy + H / 2 / scale; g += step) {
     ctx.beginPath(); ctx.moveTo(0, Y(g)); ctx.lineTo(W, Y(g)); ctx.stroke();
   }
-  const legend = [];
   // Landmarks (top view cells of 5 cm) under the trajectories.
   const dot = Math.max(1.5, 0.05 * scale);
   clouds.forEach(([topic, l], i) => {
     ctx.fillStyle = i ? 'rgba(59,130,246,0.35)' : 'rgba(100,116,139,0.45)';
-    for (let k = 0; k < l.xy.length; k += 2) ctx.fillRect(X(l.xy[k]) - dot / 2, Y(l.xy[k + 1]) - dot / 2, dot, dot);
-    legend.push(`<span style="--c:${ctx.fillStyle}">${esc(topic.replace('/vis/landmarks_cloud', ''))} landmarks · ${l.xy.length / 2}</span>`);
+    for (let k = 0; k < l.xy.length; k += 3) ctx.fillRect(X(l.xy[k]) - dot / 2, Y(l.xy[k + 1]) - dot / 2, dot, dot);
   });
   entries.forEach(([topic, p], i) => {
     const color = COLORS[i % COLORS.length];
@@ -441,12 +472,7 @@ function drawTrajectory() {
     ctx.stroke();
     const last = p[p.length - 1];
     ctx.fillStyle = color; ctx.beginPath(); ctx.arc(X(last[1]), Y(last[2]), 5, 0, 2 * Math.PI); ctx.fill();
-    let len = 0;
-    for (let k = 1; k < p.length; k++) len += Math.hypot(p[k][1] - p[k - 1][1], p[k][2] - p[k - 1][2], p[k][3] - p[k - 1][3]);
-    legend.push(`<span style="--c:${color}">${esc(topic)} · ${len.toFixed(1)} m</span>`);
   });
-  legend.push(`<span style="--c:${grid}">grid ${step} m</span>`);
-  $('legend').innerHTML = legend.join('');
 }
 
 function renderDiag(s) {

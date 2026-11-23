@@ -412,7 +412,8 @@ class Sessions:
             time.sleep(8)   # nodes active and recorder subscribed before the first frame
             job.info(f'play {path} at rate {rate}')
             if not job.stop_event.is_set():
-                docker(*self.play_args(path, rate), timeout=24 * 3600)
+                # /clock: position of the playback for the console (the SLAM does not use it).
+                docker(*self.play_args(path, rate, '--clock 10'), timeout=24 * 3600)
             job.info('play finished, stopping the SLAM')
             time.sleep(3)
             docker('exec', 'pq_slamrec', 'bash', '-c', 'pkill -INT -f "bag record"')

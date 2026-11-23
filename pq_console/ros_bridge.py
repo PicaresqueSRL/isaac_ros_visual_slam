@@ -58,7 +58,8 @@ ODOM_RE = re.compile(r'^(/cam[12]_vio)?/visual_slam/tracking/odometry(_guarded|_
 LANDMARKS_RE = re.compile(r'visual_slam/vis/landmarks_cloud$')
 LATEST_QOS = QoSProfile(depth=1, history=HistoryPolicy.KEEP_LAST,
                         reliability=ReliabilityPolicy.BEST_EFFORT)
-LANDMARK_CELL_M = 0.05       # top view grid of the landmarks sent to the page
+LANDMARK_CELL_M = 0.05       # 3D grid of the landmarks sent to the page
+LANDMARK_MAX = 60000
 EVENT_NAMES = {1: 'tracking lost', 2: 'tracking recovered', 3: 'loop closure', 4: 'configured',
                5: 'tracker initialized', 6: 'pose rejected', 7: 'pose accepted',
                8: 'tracker reset', 9: 'camera switch'}
@@ -262,8 +263,9 @@ class Slam:
             self.paths = {}       # topic -> [[t, x, y, z], ...] subsampled
             self.last_point = {}
             self.diag = {}        # topic -> dict
-            self.landmarks = {}   # topic -> (number, [x0, y0, x1, y1, ...]) top view cells
+            self.landmarks = {}   # topic -> (number, [x0, y0, z0, x1, ...]) cells of a 3D grid
             self.events = collections.deque(maxlen=50)
+            self.loop_closures = []   # [{topic, position}] of the whole run
             self.generation = time.time()
 
     def odometry(self, topic, msg):
@@ -295,22 +297,30 @@ class Slam:
 
     def event(self, topic, e):
         with self.lock:
-            self.events.append({'time': time.time(), 'topic': topic,
-                                'type': EVENT_NAMES.get(e.type, str(e.type)),
-                                'description': e.description})
+            ev = {'time': time.time(), 'topic': topic, 'type': EVENT_NAMES.get(e.type, str(e.type)),
+                  'description': e.description}
+            if e.type == 3:   # loop closure: where the tracker of the event is now
+                ns = topic.split('/visual_slam')[0]
+                for name in ('odometry_guarded', 'odometry', 'odometry_fused'):
+                    path = self.paths.get(f'{ns}/visual_slam/tracking/{name}')
+                    if path:
+                        ev['position'] = path[-1][1:]
+                        self.loop_closures.append({'topic': topic, 'position': ev['position']})
+                        break
+            self.events.append(ev)
 
     def set_landmarks(self, topic, msg):
-        """Landmark cloud of pq_cuvslam reduced to the occupied cells of a top view grid."""
+        """Landmark cloud of pq_cuvslam reduced to the occupied cells of a 3D grid."""
         offsets = {f.name: f.offset for f in msg.fields}
         n = msg.width * msg.height
-        if n == 0 or 'x' not in offsets or 'y' not in offsets:
-            xy = np.zeros((0, 2))
+        if n == 0 or not all(k in offsets for k in 'xyz'):
+            xyz = np.zeros((0, 3))
         else:
             raw = np.frombuffer(bytes(msg.data), np.uint8).reshape(n, msg.point_step)
-            xy = np.stack([raw[:, offsets[k]:offsets[k] + 4].copy().view(np.float32)[:, 0]
-                           for k in ('x', 'y')], axis=1)
-            xy = xy[np.isfinite(xy).all(axis=1)]
-        cells = np.unique(np.floor(xy / LANDMARK_CELL_M).astype(np.int64), axis=0)[:40000]
+            xyz = np.stack([raw[:, offsets[k]:offsets[k] + 4].copy().view(np.float32)[:, 0]
+                            for k in 'xyz'], axis=1)
+            xyz = xyz[np.isfinite(xyz).all(axis=1)]
+        cells = np.unique(np.floor(xyz / LANDMARK_CELL_M).astype(np.int64), axis=0)[:LANDMARK_MAX]
         flat = np.round((cells + 0.5) * LANDMARK_CELL_M, 2).reshape(-1).tolist()
         with self.lock:
             number = self.landmarks.get(topic, (0, None))[0] + 1
@@ -326,7 +336,8 @@ class Slam:
             landmarks = {t: {'number': n, 'xy': xy} for t, (n, xy) in self.landmarks.items()
                          if have_landmarks.get(t) != n}
             return {'generation': self.generation, 'paths': paths, 'diagnostics': dict(self.diag),
-                    'events': list(self.events), 'landmarks': landmarks}
+                    'events': list(self.events), 'landmarks': landmarks,
+                    'loop_closures': list(self.loop_closures)}
 
 
 class RosBridge(Node):
