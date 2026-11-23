@@ -97,6 +97,12 @@ PATH_PERIOD_NS = 1_000_000_000  # paths and pose arrays: one per second, plus th
 SKIP_TOPICS = ('/vo_pose', '/slam_odometry')
 
 
+# All SLAM data in one frame: the trackers have their own map/odom frames (cam1_odom, cam2_map,
+# odom of the selector, ...) that the recording does not connect, and the Rerun viewer does not
+# place entities whose frames it cannot resolve. Every trajectory starts at its own origin.
+WORLD_FRAME = 'world'
+
+
 def write_recording(path, write, s):
     """SLAM topics of a recording of record_slam.sh. Returns the first odometry stamp (ns)."""
     reader = open_reader(path)
@@ -118,15 +124,9 @@ def write_recording(path, write, s):
             continue
         msg = deserialize_message(data, classes.setdefault(type_, get_message(type_)))
         if type_ == 'tf2_msgs/msg/TFMessage':
-            if not msg.transforms:
-                continue
-            if s != 1.0:
-                for tr in msg.transforms:
-                    if tr.header.frame_id in ('map', 'odom'):
-                        sr.scale_position(tr.transform.translation, s)
-            write(topic, type_, msg, stamp_ns(msg.transforms[0].header) or t_rec)
-            continue
+            continue   # map/odom transforms of the trackers: the poses are written in WORLD_FRAME
         t = stamp_ns(msg.header) or t_rec
+        msg.header.frame_id = WORLD_FRAME
         if type_ == 'nav_msgs/msg/Odometry':
             first_odom = t if first_odom is None else min(first_odom, t)
             sr.scale_position(msg.pose.pose.position, s)
@@ -178,7 +178,7 @@ def write_run_folder(path, write, s):
         first_odom = t if first_odom is None else first_odom
         header = Header()
         header.stamp.sec, header.stamp.nanosec = t // 1_000_000_000, t % 1_000_000_000
-        header.frame_id = 'odom'
+        header.frame_id = WORLD_FRAME
         pose = PoseStamped()
         pose.header = header
         pose.pose.position.x, pose.pose.position.y, pose.pose.position.z = (
@@ -194,7 +194,7 @@ def write_run_folder(path, write, s):
         with open(slam) as f:
             pts = [tuple(float(r[k]) * s for k in 'xyz') for r in csv.DictReader(f)]
         if pts:
-            header.frame_id = 'map'
+            header.frame_id = WORLD_FRAME
             write('/rerun/slam_path', 'sensor_msgs/msg/PointCloud2',
                   create_cloud_xyz32(header, pts), t)
     return first_odom
