@@ -30,12 +30,18 @@ closures, tracker resets, rejected odometry, camera switches) in a log panel, an
 the trajectory where each loop closure happened. The loop closure landmarks (vis/loop_closure_cloud)
 are drawn in red.
 
+--run-dir (the run output folder of pq_cuvslam): the same events from its events.csv files
+(<run>/events.csv, or <run>/cam1 and <run>/cam2 for the dual VIO), for SLAM bags without them.
+
 Usage:
-  rerun_layout.py <to_rerun.py MCAP folder> <out.rrd> [--slam-bag <bag>] [--pylib <folder>]
+  rerun_layout.py <to_rerun.py MCAP folder> <out.rrd> [--slam-bag <bag>] [--run-dir <folder>]
+                  [--pylib <folder>]
 """
 
 import argparse
 import bisect
+import csv
+import os
 import re
 import sys
 
@@ -54,7 +60,6 @@ TRAJECTORIES = {
 EVENT_NAMES = {1: 'tracking lost', 2: 'tracking recovered', 3: 'loop closure', 4: 'configured',
                5: 'tracker initialized', 6: 'pose rejected', 7: 'pose accepted',
                8: 'tracker reset', 9: 'camera switch'}
-LOOP_CLOSURE = 3
 CAMERAS = {
     '/cam2/infra1/image_rect_raw/compressed': 'cameras/cam2/ir',
     '/cam2/color/image_raw/compressed': 'cameras/cam2/rgb',
@@ -81,6 +86,7 @@ def main():
     ap.add_argument('out')
     ap.add_argument('--pylib', default='', help='folder with rerun-sdk (appended to sys.path)')
     ap.add_argument('--slam-bag', default='', help='SLAM output bag with visual_slam/events')
+    ap.add_argument('--run-dir', default='', help='run output folder (events.csv)')
     args = ap.parse_args()
     if args.pylib:
         sys.path.append(args.pylib)
@@ -167,15 +173,17 @@ def main():
             rr.log(entity, rr.Points3D(cloud_xyz(msg), colors=[color], radii=[0.01]))
         if entity:
             counts[entity] = counts.get(entity, 0) + 1
-    if args.slam_bag:
-        log_events(rr, args.slam_bag, poses, counts)
+    events = bag_events(args.slam_bag) if args.slam_bag else []
+    if not events and args.run_dir:
+        events = csv_events(args.run_dir)
+    log_events(rr, events, poses, counts)
     print(f'written {args.out}')
     for e, n in sorted(counts.items()):
         print(f'  {e}: {n}')
 
 
-def log_events(rr, bag, poses, counts):
-    """Events of the SLAM output bag as text logs, loop closures as markers on the trajectory."""
+def bag_events(bag):
+    """Events of a SLAM output bag: [(stamp ns, namespace, type name, description)]."""
     from rclpy.serialization import deserialize_message
     import rosbag2_py
     from rosidl_runtime_py.utilities import get_message
@@ -186,26 +194,58 @@ def log_events(rr, bag, poses, counts):
     topics = [t for t in types if re.search(r'visual_slam/events$', t)]
     if not topics:
         print(f'{bag}: no visual_slam/events')
-        return
+        return []
     try:
         event_type = get_message(types[topics[0]])
     except (ImportError, ModuleNotFoundError, AttributeError) as e:
         print(f'events skipped: {e} (source the pq_cuvslam workspace)')
-        return
+        return []
     reader.set_filter(rosbag2_py.StorageFilter(topics=topics))
-    markers = {}
+    out = []
     while reader.has_next():
         topic, data, t = reader.read_next()
         e = deserialize_message(data, event_type)
         stamp = e.header.stamp.sec * 1_000_000_000 + e.header.stamp.nanosec or t
-        ns = topic.split('/visual_slam')[0].strip('/')            # cam1_vio, cam2_vio or ''
+        out.append((stamp, topic.split('/visual_slam')[0].strip('/'),
+                    EVENT_NAMES.get(e.type, str(e.type)), e.description))
+    return out
+
+
+def csv_events(run_dir):
+    """Events of the run output folder (events.csv of the tracker, or of cam1 and cam2)."""
+    out = []
+    for sub, ns in (('', ''), ('cam1', 'cam1_vio'), ('cam2', 'cam2_vio')):
+        path = os.path.join(run_dir, sub, 'events.csv')
+        if not os.path.isfile(path):
+            continue
+        with open(path) as f:
+            for row in csv.DictReader(f):
+                try:
+                    stamp = int(round(float(row['timestamp']) * 1e9))
+                except (KeyError, ValueError):
+                    continue
+                out.append((stamp, ns, row.get('type', '').replace('_', ' '), row.get('description', '')))
+    if not out:
+        print(f'{run_dir}: no events.csv')
+    return sorted(out)
+
+
+def log_events(rr, events, poses, counts):
+    """Events as text logs, loop closures as markers on the trajectory of their tracker."""
+    markers = {}
+    # Events outside the trajectories (e.g. 'configured', stamped with the node clock) would
+    # stretch the timeline: skipped.
+    all_stamps = [t for stamps, _ in poses.values() for t in (stamps[0], stamps[-1]) if stamps]
+    lo, hi = (min(all_stamps) - 60e9, max(all_stamps) + 60e9) if all_stamps else (0, float('inf'))
+    for stamp, ns, name, description in events:
+        if not lo <= stamp <= hi:
+            continue
         cam = ns.replace('_vio', '') or 'slam'
-        name = EVENT_NAMES.get(e.type, str(e.type))
         rr.set_time('time', timestamp=np.datetime64(stamp, 'ns'))
-        level = 'WARN' if e.type in (1, 6, 8) else 'INFO'
-        rr.log(f'events/{cam}', rr.TextLog(f'{name}: {e.description}', level=level))
+        level = 'WARN' if name in ('tracking lost', 'pose rejected', 'tracker reset') else 'INFO'
+        rr.log(f'events/{cam}', rr.TextLog(f'{name}: {description}', level=level))
         counts[f'events/{cam}'] = counts.get(f'events/{cam}', 0) + 1
-        if e.type != LOOP_CLOSURE:
+        if name != 'loop closure':
             continue
         # Marker at the pose of the trajectory of the tracker at the time of the loop closure.
         candidates = [f'world/{cam}/guarded', f'world/{cam}/raw'] if ns else \
