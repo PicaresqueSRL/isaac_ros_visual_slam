@@ -132,8 +132,8 @@ def main():
                 if len(pts):
                     entity = 'world/slam/' + name.replace('/', '_')
                     if name.endswith('path'):
-                        rr.log(entity, rr.LineStrips3D([pts], colors=[[200, 120, 0]],
-                                                      radii=[0.01]))
+                        rr.log(entity, rr.LineStrips3D(
+                            [pts], colors=[[200, 120, 0]], radii=[0.01]))
                     else:
                         rr.log(entity, rr.Points3D(pts, colors=[[200, 120, 0]], radii=[0.02]))
         elif type_ == 'sensor_msgs/msg/PointCloud2' and 'landmarks' in topic:
