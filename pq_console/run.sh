@@ -1,5 +1,7 @@
 #!/bin/bash
 # Starts pq_console in a container (detached; it keeps running when the ssh session ends).
+# The repository folder is mounted (not pq_console/): a git checkout that recreates
+# pq_console/ does not leave the container on a deleted folder.
 # The console drives the other containers through the Docker socket, with the docker client of
 # the host mounted read-only. It listens on the address of the configuration (default
 # 127.0.0.1:8080): reach it through an ssh tunnel (connect.sh).
@@ -46,8 +48,8 @@ docker run -d --name pq_console --network host --ipc host \
   -e ROS_DOMAIN_ID=${DOMAIN:-7} -e FASTDDS_BUILTIN_TRANSPORTS=${DDS:-LARGE_DATA} \
   -e HOST_UID=$(id -u) -e HOST_GID=$(id -g) \
   -v /var/run/docker.sock:/var/run/docker.sock -v "$(command -v docker)":/usr/bin/docker:ro \
-  -v "$DIR":/console:ro -v "$CONFIG":/console_config.yaml:ro "${VOLS[@]}" \
+  -v "$(dirname "$DIR")":/repo:ro -v "$CONFIG":/console_config.yaml:ro "${VOLS[@]}" \
   --entrypoint bash "$IMAGE" -c "source /opt/ros/lyrical/setup.bash; source /ws/install/setup.bash; \
-  exec python3 -u /console/console.py --config /console_config.yaml" > /dev/null
+  exec python3 -u /repo/$(basename "$DIR")/console.py --config /console_config.yaml" > /dev/null
 sleep 3
 docker logs pq_console 2>&1 | tail -3
