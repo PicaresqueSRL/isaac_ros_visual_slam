@@ -89,12 +89,23 @@ def rerun_base(topic):
     return '/rerun/' + rel
 
 
+# Throttling (the Rerun viewer keeps every message: a full trail or path at every frame grows
+# quadratically with the length of the run).
+TRAIL_PERIOD_NS = 500_000_000   # trail update every 0.5 s (the pose is written at every frame)
+PATH_PERIOD_NS = 1_000_000_000  # paths and pose arrays: one per second, plus the last one
+# Topics already written as converted odometry (the same poses again).
+SKIP_TOPICS = ('/vo_pose', '/slam_odometry')
+
+
 def write_recording(path, write, s):
     """SLAM topics of a recording of record_slam.sh. Returns the first odometry stamp (ns)."""
     reader = open_reader(path)
     types = {t.name: t.type for t in reader.get_all_topics_and_types()}
     classes = {}
     trails = {}
+    last_trail = {}
+    last_path = {}
+    pending_path = {}
     first_odom = None
     while reader.has_next():
         topic, data, t_rec = reader.read_next()
@@ -102,6 +113,8 @@ def write_recording(path, write, s):
         if type_ not in ('nav_msgs/msg/Odometry', 'nav_msgs/msg/Path',
                          'geometry_msgs/msg/PoseArray', 'sensor_msgs/msg/PointCloud2',
                          'tf2_msgs/msg/TFMessage', 'geometry_msgs/msg/PoseStamped'):
+            continue
+        if any(topic.endswith(x) for x in SKIP_TOPICS):
             continue
         msg = deserialize_message(data, classes.setdefault(type_, get_message(type_)))
         if type_ == 'tf2_msgs/msg/TFMessage':
@@ -125,14 +138,21 @@ def write_recording(path, write, s):
             p = msg.pose.pose.position
             trail = trails.setdefault(topic, [])
             trail.append((p.x, p.y, p.z))
-            write(base + '/trail', 'sensor_msgs/msg/PointCloud2',
-                  create_cloud_xyz32(msg.header, trail), t)
+            if t - last_trail.get(topic, -TRAIL_PERIOD_NS) >= TRAIL_PERIOD_NS:
+                last_trail[topic] = t
+                write(base + '/trail', 'sensor_msgs/msg/PointCloud2',
+                      create_cloud_xyz32(msg.header, trail[::2]), t)
         elif type_ in ('nav_msgs/msg/Path', 'geometry_msgs/msg/PoseArray'):
             poses = [ps.pose for ps in msg.poses] if type_ == 'nav_msgs/msg/Path' \
                 else list(msg.poses)
             pts = [(q.position.x * s, q.position.y * s, q.position.z * s) for q in poses]
-            write(rerun_base(topic), 'sensor_msgs/msg/PointCloud2',
-                  create_cloud_xyz32(msg.header, pts), t)
+            cloud = create_cloud_xyz32(msg.header, pts)
+            if t - last_path.get(topic, -PATH_PERIOD_NS) >= PATH_PERIOD_NS:
+                last_path[topic] = t
+                write(rerun_base(topic), 'sensor_msgs/msg/PointCloud2', cloud, t)
+                pending_path.pop(topic, None)
+            else:
+                pending_path[topic] = (cloud, t)
         elif type_ == 'sensor_msgs/msg/PointCloud2':
             if s != 1.0:
                 sr.scale_cloud(msg, s)
@@ -141,6 +161,8 @@ def write_recording(path, write, s):
             sr.scale_position(msg.pose.position, s)
             write(topic, type_, msg, t)
     del reader
+    for topic, (cloud, t) in pending_path.items():   # last state of every path
+        write(rerun_base(topic), 'sensor_msgs/msg/PointCloud2', cloud, t)
     return first_odom
 
 
