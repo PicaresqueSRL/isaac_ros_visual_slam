@@ -141,6 +141,8 @@ void VisualSlamNode::DeclareAndReadParameters()
     Param<double>("calibration_frequency", 200.0)};
   depth_scale_factor_ = Param<double>("depth_scale_factor", 1000.0);
   depth_camera_id_ = Param<int>("depth_camera_id", 0);
+  // The parameters are read again after the profile is applied: start from an empty list.
+  depth_camera_ids_.clear();
   for (const int64_t id :
     Param<std::vector<int64_t>>("depth_camera_ids", std::vector<int64_t>{}))
   {
