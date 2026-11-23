@@ -142,3 +142,15 @@ button.round.playing .i-pause { display: inline; }
 .seg button { border-radius: 0; }
 .seg button:first-child { border-radius: 6px 0 0 6px; }
 .seg button:last-child { border-radius: 0 6px 6px 0; }
+.previews-head { display: flex; justify-content: flex-end; margin: -4px 0 6px; }
+.output { margin-top: 10px; padding: 8px 10px; border-radius: 6px; background: var(--bg); border-left: 4px solid var(--muted); font-size: 13px; }
+.output.ok { border-left-color: var(--ok); }
+.output.run { border-left-color: var(--accent); }
+.output.bad { border-left-color: var(--bad); }
+.output ul { margin: 4px 0 0; padding-left: 18px; }
+.output code { font-size: 12px; word-break: break-all; }
+/* SLAM full screen: the view and the tracker panel fill the screen */
+#slam-row:fullscreen { background: var(--bg); padding: 12px; margin: 0; align-items: stretch; flex-wrap: nowrap; }
+#slam-row:fullscreen .card.wide { flex: 1 1 auto; display: flex; flex-direction: column; }
+#slam-row:fullscreen #slam3d { flex: 1; height: auto; }
+#slam-row:fullscreen > .card:last-child { flex: 0 0 300px; overflow: auto; }

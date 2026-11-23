@@ -365,7 +365,14 @@ class Sessions:
                                       ('' if label == next(iter(self.versions())) else f'_{label}'))
             job = Job('replay', name)
             job.meta = self.bag_meta(path)
-            job.meta.update(rate=float(rate), profile=profile, version=label)
+            job.meta.update(rate=float(rate), profile=profile, version=label, phase='starting',
+                            # Where the SLAM output is saved (shown in the page while it runs).
+                            outputs={'run': os.path.join(self.c.runs_dir, name),
+                                     'slam_bag': os.path.join(self.c.slam_bags_dir, f'{name}_slam'),
+                                     'rerun': os.path.join(self.c.rerun_dir, f'{name}.rrd')
+                                     if rerun and self.c.tools_dir and self.c.pylib_dir else '',
+                                     'log': os.path.join(self.c.runs_dir, f'{name}.log')},
+                            saved={})
             self.job = job
         threading.Thread(target=self._replay, args=(job, path, profile, custom, label, float(rate),
                                                     rerun), daemon=True).start()
@@ -411,10 +418,12 @@ class Sessions:
                 raise RuntimeError(out)
             time.sleep(8)   # nodes active and recorder subscribed before the first frame
             job.info(f'play {path} at rate {rate}')
+            job.meta['phase'] = 'running'
             if not job.stop_event.is_set():
                 # /clock: position of the playback for the console (the SLAM does not use it).
                 docker(*self.play_args(path, rate, '--clock 10'), timeout=24 * 3600)
             job.info('play finished, stopping the SLAM')
+            job.meta['phase'] = 'saving'
             time.sleep(3)
             docker('exec', 'pq_slamrec', 'bash', '-c', 'pkill -INT -f "bag record"')
             docker('kill', '-s', 'INT', 'pq_slam')
@@ -426,15 +435,23 @@ class Sessions:
                 docker('rm', '-f', n)
             run = (self.run_summary(os.path.join(c.runs_dir, name)) or
                    self.dual_summary(os.path.join(c.runs_dir, name)))
+            out = job.meta['outputs']
+            saved = job.meta['saved']
+            saved['run'] = bool(run)
+            saved['slam_bag'] = os.path.isfile(os.path.join(out['slam_bag'], 'metadata.yaml'))
             if run:
                 keys = ('frames', 'path_m', 'start_end_m')
+                job.meta['result'] = {k: run[k] for k in keys if k in run}
                 job.info('run: ' + ', '.join(f'{k} {run[k]}' for k in keys if k in run))
             else:
                 job.info(f'no run output: see {c.runs_dir}/{name}.log')
-            if rerun and not job.stop_event.is_set() and c.tools_dir:
+            if out['rerun'] and not job.stop_event.is_set():
                 job.info('Rerun conversion')
+                job.meta['phase'] = 'rerun'
                 self._rerun(name, path)
+                saved['rerun'] = os.path.isfile(out['rerun'])
             self.chown(c.runs_dir, c.slam_bags_dir, c.rerun_dir)
+            job.meta['phase'] = 'done'
             job.state = 'stopped' if job.stop_event.is_set() else 'done'
         except Exception as e:   # noqa: B902 - shown in the console
             job.info(f'error: {e}')

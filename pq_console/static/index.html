@@ -53,6 +53,7 @@
         <div id="job-line" class="muted center"></div>
       </div>
 
+      <div class="previews-head"><button id="swap-cams" class="small secondary" title="Order of the cameras">⇅ swap cameras</button></div>
       <div id="bag-previews" class="previews"></div>
 
       <div class="card" id="slam-card">
@@ -76,9 +77,10 @@
           <button id="slam-start">Run SLAM (real time)</button>
           <button id="slam-stop" class="danger">Stop</button>
         </div>
+        <div id="slam-output" class="output hidden"></div>
       </div>
 
-      <div class="row">
+      <div class="row" id="slam-row">
         <div class="card wide">
           <h2>SLAM
             <span class="seg">
@@ -88,6 +90,7 @@
             <label class="small-text"><input type="checkbox" id="view-landmarks" checked> landmarks</label>
             <button id="view-fit" class="small secondary">Fit</button>
             <button id="slam-reset" class="small secondary">Clear</button>
+            <button id="slam-full" class="small secondary" title="Full screen (Esc to exit)">⛶ full screen</button>
           </h2>
           <div id="slam3d"></div>
           <canvas id="traj" width="640" height="420" class="hidden"></canvas>

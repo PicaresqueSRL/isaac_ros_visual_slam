@@ -89,6 +89,9 @@ function infoText(info) {
     .filter(Boolean).join(' · ');
 }
 
+// Order of the cameras in the pages (cam1 first, or swapped).
+const camOrder = (names) => { const n = [...names].sort(); return load('swap_cams', false) ? n.reverse() : n; };
+
 // ---- tabs ----
 document.querySelectorAll('button.tab').forEach((b) => b.onclick = () => setTab(b.dataset.tab));
 function setTab(t) {
@@ -179,7 +182,7 @@ async function loadBag(path) {
 
 function renderBag() {
   const b = bag;
-  const camRows = Object.entries(b.cameras).map(([cam, c]) => {
+  const camRows = camOrder(Object.keys(b.cameras)).map((cam) => [cam, b.cameras[cam]]).map(([cam, c]) => {
     const streams = c.streams.map((s) =>
       `<tr><td>${esc(cam)}</td><td>${esc(s.label)}${s.sidecar ? ' <span class="badge">_aligned bag</span>' : ''}</td>
       <td><code>${esc(s.topic)}</code></td><td class="num">${s.width ? s.width + '×' + s.height : ''}</td>
@@ -224,10 +227,11 @@ function renderBagPreviews() {
   const j = state && state.job;
   const playing = j && j.state === 'running' && j.meta && j.meta.path === bag.path;
   const show = tab === 'bags' && playing;
-  const key = JSON.stringify([bag.path, show]);
+  const order = camOrder(Object.keys(bag.cameras));
+  const key = JSON.stringify([bag.path, show, order]);
   if (el.dataset.key !== key) {
     el.dataset.key = key;
-    el.innerHTML = Object.entries(bag.cameras).filter(([, c]) => c.streams.length).map(([cam, c]) =>
+    el.innerHTML = order.map((cam) => [cam, bag.cameras[cam]]).filter(([, c]) => c.streams.length).map(([cam, c]) =>
       `<div class="cam-row"><h3>${esc(cam)}</h3><div class="tiles">${c.streams.map((s) =>
         `<div class="tile" data-topic="${esc(s.topic)}"><div class="label"><span>${esc(s.label)}</span>
          <span class="muted">${s.width ? s.width + '×' + s.height : ''}</span></div>
@@ -270,6 +274,7 @@ function renderJob() {
   $('job-log').textContent = j && j.kind === 'replay' ? j.log.join('\n') : '';
   $('slam-start').disabled = busy || !bag;
   $('slam-stop').disabled = !(running && j.kind === 'replay');
+  renderOutput(j);
   if (j && lastJobState === 'running' && j.state !== 'running' && bag) loadBag(bag.path);
   lastJobState = j ? j.state : null;
   renderBagPreviews();
@@ -284,6 +289,12 @@ $('pb-play').onclick = () => {
   }
 };
 $('pb-stop').onclick = () => post('job/stop').then(refreshState);
+$('swap-cams').onclick = () => {
+  save('swap_cams', !load('swap_cams', false));
+  if (bag) renderBag();
+  renderBagPreviews();
+  renderLivePreviews();
+};
 $('pb-rate').onchange = () => {
   if (state && state.job && state.job.state === 'running') post('player', { command: 'rate', value: +$('pb-rate').value });
 };
@@ -373,6 +384,33 @@ $('slam-start').onclick = async () => {
 };
 $('slam-stop').onclick = () => confirm('Stop the SLAM?') && post('job/stop').then(refreshState);
 
+// What the SLAM run saves and where: shown while it runs and when it ends.
+function renderOutput(j) {
+  const el = $('slam-output');
+  if (!j || j.kind !== 'replay' || !bag || !j.meta || j.meta.path !== bag.path || !j.meta.outputs) {
+    el.classList.add('hidden');
+    return;
+  }
+  const m = j.meta, o = m.outputs, sv = m.saved || {};
+  const item = (label, path, key) => {
+    if (!path) return '';
+    const mark = j.state === 'running' && !(key in sv) ? '…' : sv[key] ? '✓' : '✗';
+    return `<li>${mark} ${label}: <code>${esc(path)}</code></li>`;
+  };
+  const phases = { starting: 'starting the SLAM', running: 'SLAM running, recording its output',
+    saving: 'bag finished: writing the run output', rerun: 'run saved, creating the Rerun file', done: 'done' };
+  let head, cls;
+  if (j.state === 'running') { head = `● ${phases[m.phase] || m.phase} — the output is being saved`; cls = 'run'; }
+  else if (j.state === 'done') { head = '✓ SLAM saved'; cls = 'ok'; }
+  else if (j.state === 'stopped') { head = '■ stopped: the run output up to the stop is saved'; cls = 'ok'; }
+  else { head = '✗ SLAM failed: see the log'; cls = 'bad'; }
+  const r = m.result ? ` · ${m.result.frames} frames, path ${m.result.path_m} m, start-end ${m.result.start_end_m} m` : '';
+  el.className = 'output ' + cls;
+  el.innerHTML = `<b>${esc(head)}</b>${esc(r)}<ul>${item('run (CSV, run_info.json)', o.run, 'run')}
+    ${item('SLAM output bag', o.slam_bag, 'slam_bag')}${item('Rerun file', o.rerun, 'rerun')}
+    <li class="muted">log: <code>${esc(o.log)}</code></li></ul>`;
+}
+
 function renderRuns() {
   const runs = (bag && bag.runs) || [];
   const ev = (r, k) => Object.entries(r.events || {}).filter(([n]) => n.endsWith(k)).reduce((a, [, v]) => a + v, 0);
@@ -424,6 +462,13 @@ function renderLegend() {
   $('legend').innerHTML = items.join('');
 }
 $('slam-reset').onclick = () => post('slam/reset').then(refreshSlam);
+$('slam-full').onclick = () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else $('slam-row').requestFullscreen().catch((e) => showError('full screen: ' + e.message));
+};
+document.addEventListener('fullscreenchange', () => {
+  $('slam-full').textContent = document.fullscreenElement ? '✕ exit full screen' : '⛶ full screen';
+});
 
 function drawTrajectory() {
   const cv = $('traj');
@@ -599,7 +644,7 @@ $('cam-stop').onclick = () => confirm('Stop the cameras?') && post('cameras/stop
 function renderLivePreviews() {
   const el = $('live-previews');
   const published = new Set(topics.topics.filter((t) => t.publishers).map((t) => t.name));
-  const cams = (state && state.cameras) || [];
+  const cams = camOrder((state && state.cameras) || []);
   const rows = cams.map((cam) => [cam, CAM_STREAMS.map(([suffix, label]) => [`/${cam}/${suffix}`, label])
     .filter(([t]) => published.has(t))]).filter(([, st]) => st.length);
   const show = tab === 'cameras';
