@@ -1,0 +1,9 @@
+# RealSense driver (realsense2_camera) on top of the pq_cuvslam image, for a PC with D455
+# cameras: camera_image of pq_console on x86 (on the Jetson: the Isaac ROS realsense image).
+#   docker build -f pq_console/docker/Dockerfile.realsense -t pq_realsense:dev pq_console/docker
+ARG BASE_IMAGE=pq_cuvslam:dev
+FROM ${BASE_IMAGE}
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ros-lyrical-realsense2-camera \
+        ros-lyrical-realsense2-camera-msgs \
+    && rm -rf /var/lib/apt/lists/*

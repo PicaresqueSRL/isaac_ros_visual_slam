@@ -37,6 +37,57 @@ import bags as bags_mod
 
 NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,80}$')
 PROFILES_DIR = '/ws/install/pq_cuvslam/share/pq_cuvslam/profiles'
+# Recording presets: streams of each chosen camera. The driver streams are switched to match
+# (enable_* parameters); 'aligned' is the depth aligned to the RGB (align_depth.enable).
+PRESETS = {
+    'ir_imu': {'label': 'IR stereo + IMU', 'streams': ['infra1', 'infra2', 'imu']},
+    'ir_depth_imu': {'label': 'IR stereo + depth + IMU',
+                     'streams': ['infra1', 'infra2', 'depth', 'imu']},
+    'all': {'label': 'IR stereo + RGB + depth + IMU',
+            'streams': ['infra1', 'infra2', 'color', 'depth', 'imu']},
+    'rgbd_imu': {'label': 'RGB + depth aligned to RGB + IMU', 'streams': ['color', 'aligned', 'imu']},
+    'all_aligned': {'label': 'IR stereo + RGB + depth + depth aligned to RGB + IMU',
+                    'streams': ['infra1', 'infra2', 'color', 'depth', 'aligned', 'imu']},
+}
+STREAM_TOPICS = {
+    'infra1': ['infra1/image_rect_raw', 'infra1/camera_info', 'infra1/metadata'],
+    'infra2': ['infra2/image_rect_raw', 'infra2/camera_info', 'infra2/metadata'],
+    'color': ['color/image_raw', 'color/camera_info', 'color/metadata'],
+    'depth': ['depth/image_rect_raw', 'depth/camera_info', 'depth/metadata'],
+    'aligned': ['aligned_depth_to_color/image_raw', 'aligned_depth_to_color/camera_info'],
+    'imu': ['imu', 'gyro/metadata', 'accel/metadata'],
+}
+
+
+def driver_streams(streams):
+    """enable_* parameters of the RealSense driver for a list of recorded streams."""
+    s = set(streams)
+    return {'enable_infra1': 'infra1' in s, 'enable_infra2': 'infra2' in s,
+            'enable_color': bool(s & {'color', 'aligned'}),
+            'enable_depth': bool(s & {'depth', 'aligned'}),
+            'align_depth.enable': 'aligned' in s}
+
+
+def usb_cameras():
+    """RealSense devices on the USB bus (sysfs): model, serial, link speed."""
+    out = []
+    for d in sorted(glob.glob('/sys/bus/usb/devices/*')):
+        def read(name, d=d):
+            try:
+                with open(os.path.join(d, name)) as f:
+                    return f.read().strip()
+            except OSError:
+                return ''
+        if read('idVendor') != '8086':
+            continue
+        speed = read('speed')
+        out.append({'port': os.path.basename(d), 'product_id': read('idProduct'),
+                    'model': read('product').replace('Intel(R) RealSense(TM) ', ''),
+                    'serial': read('serial'),
+                    'speed_mbps': int(float(speed)) if speed else None})
+    return out
+
+
 SLAM_TOPICS_RE = r'^(/tf|(/cam[12]_vio)?/visual_slam/(tracking|vis|diagnostics|events|selector|status).*)$'
 
 
@@ -101,8 +152,7 @@ class Sessions:
         for d in (self.c.bags_dir, self.c.runs_dir, self.c.rerun_dir, self.c.slam_bags_dir):
             os.makedirs(d, exist_ok=True)
         if running('pq_rec'):
-            self.recording = {'name': '(started outside the console)', 'started': None,
-                              'depth': None}
+            self.recording = {'name': '(started outside the console)', 'started': None}
 
     # Common container arguments: host network and IPC (DDS shared memory between containers).
     def ros_args(self):
@@ -136,9 +186,11 @@ class Sessions:
                 f'camera_namespace:=/ serial_no:=_{cam.serial} {params} > /tmp/{cam.name}.log 2>&1 &')
             if i + 1 < len(self.c.cameras):
                 launches.append('sleep 4')
-        # The emitter argument of the launch is not applied by the driver: set it at runtime.
-        off = ' && '.join(f'ros2 param set /{cam.name} depth_module.emitter_enabled 0 > /dev/null 2>&1'
-                          for cam in self.c.cameras)
+        # The emitter argument of the launch is not applied by the driver: set it at runtime and
+        # read it back (ros2 param set exits with 0 also when the parameter is not declared yet).
+        off = ' && '.join(f'ros2 param set /{cam.name} depth_module.emitter_enabled 0 > /dev/null 2>&1 && '
+                          f'ros2 param get /{cam.name} depth_module.emitter_enabled 2>/dev/null | '
+                          "grep -q 'value is: 0'" for cam in self.c.cameras)
         script = ('source /opt/ros/lyrical/setup.bash\n' + '\n'.join(launches) +
                   f'\nfor i in $(seq 30); do sleep 2; {off} && echo emitters off > /tmp/emitter.log '
                   '&& break; done\nwait')
@@ -156,23 +208,12 @@ class Sessions:
 
     # ---- recording ----
 
-    def record_topics(self, depth, aligned):
-        topics = []
-        for cam in self.c.cameras or []:
-            n = cam.name
-            for s in ('infra1', 'infra2', 'color'):
-                topics += [f'/{n}/{s}/image_rect_raw', f'/{n}/{s}/image_raw',
-                           f'/{n}/{s}/camera_info', f'/{n}/{s}/metadata']
-            topics += [f'/{n}/imu', f'/{n}/gyro/metadata', f'/{n}/accel/metadata']
-            if depth:
-                topics += [f'/{n}/depth/image_rect_raw', f'/{n}/depth/camera_info',
-                           f'/{n}/depth/metadata']
-            if aligned:
-                topics += [f'/{n}/aligned_depth_to_color/image_raw',
-                           f'/{n}/aligned_depth_to_color/camera_info']
+    @staticmethod
+    def record_topics(cameras, streams):
+        topics = [f'/{cam}/{t}' for cam in cameras for s in streams for t in STREAM_TOPICS[s]]
         return topics + ['/tf_static']
 
-    def start_recording(self, name, depth=True, aligned=False):
+    def start_recording(self, name, preset='all', cameras=None):
         with self.lock:
             if self.recording:
                 raise ValueError('a recording is already running')
@@ -182,7 +223,13 @@ class Sessions:
                 raise ValueError(f'a recording named {name} exists')
             if self.job and self.job.state == 'running' and self.job.kind == 'replay':
                 raise ValueError('a replay is running (same topics)')
-            topics = ' '.join(self.record_topics(depth, aligned))
+            if preset not in PRESETS:
+                raise ValueError(f'unknown preset {preset}')
+            known = [c.name for c in self.c.cameras]
+            cameras = [c for c in (cameras or known) if c in known]
+            if not cameras:
+                raise ValueError('choose at least one camera')
+            topics = ' '.join(self.record_topics(cameras, PRESETS[preset]['streams']))
             docker('rm', '-f', 'pq_rec')
             code, out = docker(
                 'run', '-d', '--name', 'pq_rec', *self.ros_args(), '-v', f'{self.c.bags_dir}:/out',
@@ -192,7 +239,8 @@ class Sessions:
                 f'-o /out/{name} --topics {topics} > /out/{name}.log 2>&1')
             if code:
                 raise RuntimeError(out)
-            self.recording = {'name': name, 'started': time.time(), 'depth': depth}
+            self.recording = {'name': name, 'started': time.time(), 'preset': preset,
+                              'label': PRESETS[preset]['label'], 'cameras': cameras}
 
     def recording_status(self):
         if not self.recording:

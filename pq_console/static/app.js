@@ -4,8 +4,10 @@
 
 const $ = (id) => document.getElementById(id);
 const COLORS = ['#e5484d', '#3b82f6', '#22a559', '#f59e0b', '#a855f7', '#14b8a6', '#64748b'];
-const DEFAULT_PREVIEWS = ['/cam2/infra1/image_rect_raw', '/cam2/color/image_raw',
-  '/cam1/infra1/image_rect_raw', '/cam1/color/image_raw'];
+// Image streams of a D455 (RealSense driver), in display order.
+const CAM_STREAMS = [['infra1/image_rect_raw', 'IR left'], ['infra2/image_rect_raw', 'IR right'],
+  ['color/image_raw', 'RGB'], ['depth/image_rect_raw', 'depth (IR1)'],
+  ['aligned_depth_to_color/image_raw', 'depth (RGB)']];
 const TABS = ['bags', 'cameras', 'rig', 'graph'];
 
 let tab = 'bags';
@@ -91,10 +93,10 @@ function setTab(t) {
   save('tab', t);
   document.querySelectorAll('button.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === t));
   document.querySelectorAll('.tab-body').forEach((s) => s.classList.toggle('hidden', s.id !== 'tab-' + t));
-  updateLivePreviews();
+  renderLivePreviews();
   renderBagPreviews();
   if (t === 'graph') refreshTopics();
-  if (t === 'cameras') refreshSettings();
+  if (t === 'cameras') { refreshCameras(); if ($('settings-card').open) refreshSettings(); }
 }
 
 // ---- state ----
@@ -469,83 +471,118 @@ function renderDiag(s) {
 // =====================================================================================
 // Cameras: live, recording, settings
 // =====================================================================================
-let previewTopics = load('previews', DEFAULT_PREVIEWS);
+let camInfo = null;       // /api/cameras: configured and connected cameras, presets
+
+async function refreshCameras() {
+  try { camInfo = await get('/api/cameras'); } catch (e) { return; }
+  renderCameras();
+  renderPresets();
+}
 
 function renderCameras() {
   const s = state;
-  const rows = s.cameras.map((cam) => {
-    const v = (s.emitters || {})[cam];
-    const em = !s.cameras_running ? chip('stopped') : v === null || v === undefined ? chip('emitter ?', 'warn')
-      : v ? chip('emitter ON', 'bad') : chip('emitter off', 'ok');
-    const btn = s.cameras_running && v ? `<button class="small danger" data-emitter="${esc(cam)}">turn off</button>` : '';
-    return `<div class="cam"><b>${esc(cam)}</b>${em}${btn}</div>`;
+  if (!s) return;
+  const rows = ((camInfo && camInfo.configured) || s.cameras.map((name) => ({ name }))).map((c) => {
+    const v = (s.emitters || {})[c.name];
+    const usb = c.usb ? `${c.usb.speed_mbps >= 5000 ? chip('USB 3', 'ok') : chip('USB 2: low bandwidth', 'bad')}` :
+      c.connected === false ? chip('not connected', 'bad') : '';
+    const driver = c.driver ? chip('driver running', 'ok') : chip('driver off');
+    const em = !c.driver ? '' : v === null || v === undefined ? chip('emitter ?', 'warn')
+      : v ? chip('emitter ON', 'bad') + ` <button class="small danger" data-emitter="${esc(c.name)}">turn off</button>` : chip('emitter off', 'ok');
+    return `<tr><td><b>${esc(c.name)}</b></td><td>${esc(c.usb ? c.usb.model : '')}</td><td><code>${esc(c.serial || '')}</code></td>
+      <td>${usb}</td><td>${driver}</td><td>${em}</td></tr>`;
   });
-  $('cameras').innerHTML = rows.join('') || '<div class="muted">no cameras in the configuration</div>';
-  $('cameras').querySelectorAll('[data-emitter]').forEach((b) => b.onclick = () =>
+  $('cam-table').innerHTML = `<thead><tr><th>Name</th><th>Model</th><th>Serial</th><th>USB</th><th>Driver</th><th>IR emitter</th></tr></thead>
+    <tbody>${rows.join('') || '<tr><td colspan="6" class="muted">no cameras in the configuration</td></tr>'}</tbody>`;
+  const other = (camInfo && camInfo.other) || [];
+  $('cam-other').innerHTML = other.length ? 'Connected but not in the configuration: ' +
+    other.map((u) => `${esc(u.model)} <code>${esc(u.serial)}</code>`).join(', ') : '';
+  $('cam-table').querySelectorAll('[data-emitter]').forEach((b) => b.onclick = () =>
     post('emitter', { camera: b.dataset.emitter, value: 0 }).then(refreshState));
   $('cam-start').disabled = s.cameras_running || !s.cameras.length || !!(s.job && s.job.state === 'running');
   $('cam-stop').disabled = !s.cameras_running || !!s.recording;
 }
 
+function renderPresets() {
+  if (!camInfo) return;
+  const cur = camInfo.preset || {};
+  const html = Object.entries(camInfo.presets).map(([k, v]) => `<option value="${esc(k)}">${esc(v.label)}</option>`).join('');
+  if ($('preset').dataset.html !== html) {
+    $('preset').innerHTML = html;
+    $('preset').dataset.html = html;
+    $('preset').value = cur.preset || 'all';
+  }
+  const camsHtml = camInfo.configured.map((c) => `<label><input type="checkbox" data-reccam="${esc(c.name)}"
+    ${(cur.cameras || []).includes(c.name) ? 'checked' : ''}> ${esc(c.name)}</label>`).join('');
+  if ($('rec-cams').dataset.html !== camsHtml) { $('rec-cams').innerHTML = camsHtml; $('rec-cams').dataset.html = camsHtml; }
+  $('streams-state').textContent = cur.preset ? `applied: ${camInfo.presets[cur.preset].label} on ${cur.cameras.join(', ')}` : '';
+}
+const recCameras = () => [...document.querySelectorAll('[data-reccam]')].filter((i) => i.checked).map((i) => i.dataset.reccam);
+$('streams-apply').onclick = async () => {
+  $('streams-apply').disabled = true;
+  $('streams-state').textContent = 'switching the streams (the cameras restart them)…';
+  try {
+    const r = await post('streams/apply', { preset: $('preset').value, cameras: recCameras() });
+    const ch = Object.entries(r.changed).map(([c, v]) => `${c}: ${v.join(', ')}`).join('; ');
+    $('streams-state').textContent = ch ? 'changed ' + ch : 'streams already as the preset';
+  } catch (e) { $('streams-state').textContent = ''; }
+  $('streams-apply').disabled = false;
+  refreshCameras();
+};
+
 function renderRecording() {
   const r = state.recording;
   $('rec-start').disabled = !!r || !state.cameras_running;
   $('rec-stop').disabled = !r;
+  $('streams-apply').disabled = !!r || !state.cameras_running;
   if (!$('rec-name').value) {
     const d = new Date();
     const p = (n) => String(n).padStart(2, '0');
     $('rec-name').value = `rec_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`;
   }
-  if (!r) { $('rec-state').textContent = 'not recording'; return; }
+  if (!r) { $('rec-state').textContent = state.cameras_running ? 'not recording' : 'start the cameras to record'; return; }
   const el = r.started ? fmtDur(state.time - r.started) : '';
   $('rec-state').innerHTML = `${chip('REC', 'bad')} ${esc(r.name)} ${el} · ${fmtBytes(r.size)}` +
+    (r.label ? ` · ${esc(r.label)} · ${esc((r.cameras || []).join(', '))}` : '') +
     (r.running ? '' : ' · <b>recorder stopped</b>');
 }
 $('rec-start').onclick = async () => {
-  const body = { name: $('rec-name').value.trim(), depth: $('rec-depth').checked, aligned: $('rec-aligned').checked };
+  const body = { name: $('rec-name').value.trim(), preset: $('preset').value, cameras: recCameras() };
   try { await post('record/start', body); } catch (e) {
-    if (/emitter/.test(e.message) && confirm(e.message + '\n\nRecord anyway?')) await post('record/start', { ...body, force: true });
+    if (/emitter|streams off/.test(e.message) && confirm(e.message + '\n\nRecord anyway?')) await post('record/start', { ...body, force: true });
   }
   refreshState();
 };
 $('rec-stop').onclick = async () => {
   $('rec-stop').disabled = true;
-  await post('record/stop').catch(() => {});
+  const r = await post('record/stop').catch(() => null);
   $('rec-name').value = '';
+  if (r) showError('');
   refreshState();
 };
-$('cam-start').onclick = () => post('cameras/start').then(refreshState);
-$('cam-stop').onclick = () => confirm('Stop the cameras?') && post('cameras/stop').then(refreshState);
+$('cam-start').onclick = () => post('cameras/start').then(() => { refreshState(); setTimeout(refreshCameras, 8000); });
+$('cam-stop').onclick = () => confirm('Stop the cameras?') && post('cameras/stop').then(() => { refreshState(); refreshCameras(); });
 
-function imageTopics() {
-  return topics.topics.filter((t) => /sensor_msgs\/msg\/(Compressed)?Image$/.test(t.type)).map((t) => t.name);
-}
-function updateLivePreviews() {
-  const names = imageTopics();
-  document.querySelectorAll('#live-previews .preview').forEach((el) => {
-    const slot = +el.dataset.slot;
-    const want = tab === 'cameras' ? previewTopics[slot] || '' : '';
-    if (!el.firstChild) {
-      el.innerHTML = '<select></select><div class="frame"><img alt=""></div><div class="info"></div>';
-      el.querySelector('select').onchange = (ev) => {
-        previewTopics[slot] = ev.target.value;
-        save('previews', previewTopics);
-        updateLivePreviews();
-      };
-    }
-    const sel = el.querySelector('select');
-    const options = ['', ...new Set([...names, previewTopics[slot] || ''])].filter((x, i) => i === 0 || x);
-    const html = options.map((n) => `<option value="${esc(n)}">${n ? esc(n) : '(none)'}</option>`).join('');
-    if (sel.dataset.html !== html) { sel.innerHTML = html; sel.dataset.html = html; }
-    sel.value = previewTopics[slot] || '';
-    const img = el.querySelector('img');
-    const available = want && names.includes(want);
-    const topic = available ? want : '';
-    if (img.dataset.topic !== topic) {
-      img.dataset.topic = topic;
-      if (!topic) img.removeAttribute('src');
-    }
-    el.querySelector('.info').textContent = !want ? '' : !available ? 'topic not published' : infoText(frameInfo[want]);
+// Live view: every image stream the cameras publish, one row per camera.
+function renderLivePreviews() {
+  const el = $('live-previews');
+  const published = new Set(topics.topics.filter((t) => t.publishers).map((t) => t.name));
+  const cams = (state && state.cameras) || [];
+  const rows = cams.map((cam) => [cam, CAM_STREAMS.map(([suffix, label]) => [`/${cam}/${suffix}`, label])
+    .filter(([t]) => published.has(t))]).filter(([, st]) => st.length);
+  const show = tab === 'cameras';
+  const key = JSON.stringify([rows, show]);
+  if (el.dataset.key !== key) {
+    el.dataset.key = key;
+    el.innerHTML = !show ? '' : rows.length ? rows.map(([cam, st]) => `<div class="cam-row"><h3>${esc(cam)}</h3><div class="tiles">${
+      st.map(([t, label]) => `<div class="tile" data-topic="${esc(t)}"><div class="label"><span>${esc(label)}</span>
+      <span class="muted">${esc(t)}</span></div><div class="frame"><img data-topic="${esc(t)}" alt=""></div><div class="info"></div></div>`).join('')}</div></div>`).join('')
+      : '<div class="card muted">No camera streams published: start the cameras.</div>';
+  }
+  el.querySelectorAll('.tile').forEach((t) => {
+    const info = frameInfo[t.dataset.topic];
+    t.querySelector('.info').textContent = infoText(info);
+    if (info && info.width) t.querySelector('.frame').style.aspectRatio = `${info.width}/${info.height}`;
   });
 }
 
@@ -611,6 +648,7 @@ function renderSettings() {
   });
 }
 $('settings-reload').onclick = refreshSettings;
+$('settings-card').ontoggle = () => { save('settings_open', $('settings-card').open); if ($('settings-card').open) refreshSettings(); };
 $('settings-filter').oninput = () => settings && renderSettings();
 $('settings-save').onclick = () => post('settings/save').then(refreshSettings);
 
@@ -619,7 +657,7 @@ $('settings-save').onclick = () => post('settings/save').then(refreshSettings);
 // =====================================================================================
 async function refreshTopics() {
   try { topics = await get('/api/topics'); } catch (e) { return; }
-  updateLivePreviews();
+  renderLivePreviews();
   if (tab !== 'graph') return;
   $('nodes').innerHTML = topics.nodes.map((n) => `<li>${esc(n)}</li>`).join('');
   const f = $('topic-filter').value.trim().toLowerCase();
@@ -640,6 +678,7 @@ $('topic-filter').oninput = refreshTopics;
   const src = load('slam_src', 'profile');
   const radio = document.querySelector(`input[name=slam-src][value="${src}"]`);
   if (radio) radio.checked = true;
+  $('settings-card').open = load('settings_open', false);
   const hashTab = location.hash.slice(1);
   setTab(TABS.includes(hashTab) ? hashTab : load('tab', 'bags'));
   await loadVersions();
@@ -651,7 +690,8 @@ $('topic-filter').oninput = refreshTopics;
   if (lastBag) loadBag(lastBag);
   refreshTopics();
   setInterval(refreshState, 1000);
-  setInterval(() => { if (tab === 'cameras') updateLivePreviews(); }, 1000);
+  setInterval(() => { if (tab === 'cameras') renderLivePreviews(); }, 1000);
+  setInterval(() => { if (tab === 'cameras') refreshCameras(); }, 5000);
   setInterval(() => { if (tab === 'bags') refreshSlam(); }, 250);
   framesLoop();
   setInterval(refreshTopics, 2000);

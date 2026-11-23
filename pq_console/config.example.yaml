@@ -6,7 +6,8 @@ data_dir: /home/user/workspaces/pq_cuvslam/live   # bags/, runs/, rerun/
 browse_roots: []                 # more folders with bags, read only (e.g. [/home/user/bags])
 ros_domain_id: 7
 dds_transports: LARGE_DATA       # Fast DDS: large images between containers
-# RealSense driver, recorder and player (Jetson: the Isaac ROS realsense image)
+# RealSense driver, recorder and player (Jetson: the Isaac ROS realsense image; PC:
+# pq_realsense:dev from docker/Dockerfile.realsense)
 camera_image: nvcr.io/nvidia/isaac/ros:isaac_ros-realsense_<tag>
 slam_image: pq_cuvslam:dev
 gpu_args: [--runtime, nvidia]    # PC: [--gpus, all]

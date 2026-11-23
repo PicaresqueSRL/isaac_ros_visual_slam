@@ -35,11 +35,15 @@ containers mount them at the same path.
   the chosen sensors (IR stereo, RGB, depth per camera, one IMU: the console picks the cuVSLAM
   mode and writes the profile), on the chosen cuVSLAM build; trajectory, tracker state and
   events are shown live, the runs of the bag are listed with their Rerun file.
-- **Cameras**: cameras on/off, IR emitter of each camera (a recording does not start with an
-  emitter on, unless confirmed), recording with or without depth, four previews, settings of
-  the camera drivers side by side, changed at runtime on one or all cameras; *Save as startup
-  settings* writes `data_dir/camera_settings.yaml`, applied after *Start cameras*. The
-  parameters of the drivers at the start of each recording are saved in
+- **Cameras**: the configured cameras with their USB link (from sysfs: model, serial, USB 3 or
+  USB 2, connected or not), driver and IR emitter state; start/stop of the drivers. Recording:
+  a preset (e.g. IR stereo + IMU, everything, RGB + aligned depth + IMU) and the cameras;
+  *Apply streams* switches the driver streams to the preset, *Start recording* records exactly
+  those topics (refused if a stream is off or an emitter is on, unless confirmed), *Stop and
+  save* closes the bag. Live view of every stream the cameras publish, one row per camera.
+  Settings of the camera drivers side by side (collapsible), changed at runtime on one or all
+  cameras; *Save as startup settings* writes `data_dir/camera_settings.yaml`, applied after
+  *Start cameras*. The parameters of the drivers at the start of each recording are saved in
   `bags/<name>.camera_settings.yaml`.
 - **Rig 3D**: (next) cameras in 3D, coordinates import, camera models.
 - **Graph**: ROS nodes and topics; rates on request.
@@ -64,5 +68,7 @@ install folder; profiles and sensors that need the Multisensor mode are refused 
 The container image is the pq_cuvslam image (rclpy, OpenCV, pq_cuvslam messages); nothing else
 is installed.
 
-Without cameras (development on a PC): `mock_cameras.py` starts /cam1 and /cam2 nodes with D455
-driver parameters, and a played bag gives the previews.
+Cameras on a PC: the RealSense driver image for x86 is built with
+`docker build -f pq_console/docker/Dockerfile.realsense -t pq_realsense:dev pq_console/docker`
+(`camera_image: pq_realsense:dev`). Without cameras: `mock_cameras.py` starts /cam1 and /cam2
+nodes with D455 driver parameters, and a played bag gives the previews.

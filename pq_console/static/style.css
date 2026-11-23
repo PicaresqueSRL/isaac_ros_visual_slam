@@ -103,3 +103,5 @@ ul.entries .meta { margin-left: auto; font-size: 11px; color: var(--muted); whit
 #sensors td, #sensors th { text-align: center; }
 #sensors td:first-child, #sensors th:first-child { text-align: left; }
 .badge { font-size: 11px; padding: 0 6px; border-radius: 8px; background: var(--chip); color: var(--muted); }
+summary.card-title { font-weight: 600; font-size: 14px; color: var(--text); margin: 0; }
+#settings-card[open] summary.card-title { margin-bottom: 8px; }

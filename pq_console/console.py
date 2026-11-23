@@ -79,6 +79,7 @@ class Console:
         self.emitter_cache = {'time': 0.0, 'value': {}}
         self.settings_file = os.path.join(config.data_dir, 'camera_settings.yaml')
         self.settings_log = []    # messages of the startup settings
+        self.preset = {'preset': 'all', 'cameras': [c.name for c in config.cameras]}
 
     def emitters(self, max_age=3.0):
         """IR emitter of each camera (parameter of the driver node); None if not reachable."""
@@ -106,6 +107,56 @@ class Console:
         s['clock'] = clock[0] if clock and time.time() - clock[1] < 2 else None
         s['time'] = time.time()
         return s
+
+    # ---- connected cameras, recording presets ----
+
+    def cameras_info(self):
+        usb = sessions_mod.usb_cameras()
+        by_serial = {u['serial']: u for u in usb}
+        nodes = set(self.ros.topics_state()['nodes'])
+        configured = []
+        for c in self.c.cameras:
+            u = by_serial.get(c.serial)
+            configured.append({'name': c.name, 'serial': c.serial, 'connected': bool(u),
+                               'usb': u, 'driver': f'/{c.name}' in nodes})
+        known = {c.serial for c in self.c.cameras}
+        return {'configured': configured, 'other': [u for u in usb if u['serial'] not in known],
+                'presets': sessions_mod.PRESETS, 'preset': self.preset}
+
+    def apply_streams(self, preset, cameras):
+        """Driver streams (enable_*) of the chosen cameras for a recording preset."""
+        if preset not in sessions_mod.PRESETS:
+            raise ValueError(f'unknown preset {preset}')
+        if self.sessions.recording:
+            raise ValueError('not during a recording')
+        cameras = [c for c in cameras if c in {x.name for x in self.c.cameras}]
+        if not cameras:
+            raise ValueError('choose at least one camera')
+        wanted = sessions_mod.driver_streams(sessions_mod.PRESETS[preset]['streams'])
+        changed = {}
+        for cam in cameras:
+            node = f'/{cam}'
+            for name, value in wanted.items():
+                type_, current = self.ros.get_param_typed(node, name)
+                if current != value:
+                    self.ros.set_param(node, name, value, type_, timeout=15.0)
+                    changed.setdefault(cam, []).append(f'{name}={value}')
+        self.preset = {'preset': preset, 'cameras': cameras}
+        return {'changed': changed}
+
+    def check_streams(self, preset, cameras):
+        """Refuse a recording whose preset needs streams the driver does not publish."""
+        if preset not in sessions_mod.PRESETS:
+            raise ValueError(f'unknown preset {preset}')
+        wanted = sessions_mod.driver_streams(sessions_mod.PRESETS[preset]['streams'])
+        missing = []
+        for cam in cameras:
+            for name, value in wanted.items():
+                if value and not self.ros.get_param(f'/{cam}', name):
+                    missing.append(f'{cam} {name}')
+        if missing:
+            raise ValueError('streams off in the driver: ' + ', '.join(missing) +
+                             ' (Apply streams first)')
 
     # ---- camera settings ----
 
@@ -261,7 +312,9 @@ class Console:
             return self.save_settings()
         elif name == 'record/start':
             if self.c.cameras:
-                emitters = self.emitters(max_age=0)
+                chosen = set(body.get('cameras') or self.preset['cameras'] or
+                             [c.name for c in self.c.cameras])
+                emitters = {k: v for k, v in self.emitters(max_age=0).items() if k in chosen}
                 on = [cam for cam, v in emitters.items() if v]
                 unknown = [cam for cam, v in emitters.items() if v is None]
                 if on and not body.get('force'):
@@ -269,10 +322,15 @@ class Console:
                 if unknown and not body.get('force'):
                     raise ValueError(f'emitter state unknown (camera not running?): '
                                      f'{", ".join(unknown)}')
-            self.sessions.start_recording(body.get('name', ''), bool(body.get('depth', True)),
-                                          bool(body.get('aligned', False)))
+            preset = body.get('preset') or self.preset['preset']
+            cameras = body.get('cameras') or self.preset['cameras'] or [c.name for c in self.c.cameras]
+            if self.c.cameras and not body.get('force'):
+                self.check_streams(preset, cameras)
+            self.sessions.start_recording(body.get('name', ''), preset, cameras)
             threading.Thread(target=self.write_recording_settings, args=(body['name'],),
                              daemon=True).start()
+        elif name == 'streams/apply':
+            return self.apply_streams(body['preset'], body.get('cameras') or [])
         elif name == 'record/stop':
             return {'name': self.sessions.stop_recording()}
         elif name == 'slam/plan':
@@ -359,6 +417,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(c.sessions.runs())
             if url.path == '/api/profiles':
                 return self.send_json(c.sessions.profiles(q.get('version')))
+            if url.path == '/api/cameras':
+                return self.send_json(c.cameras_info())
             if url.path == '/api/camera_settings':
                 return self.send_json(c.camera_settings())
             self.send_json({'error': 'not found'}, 404)

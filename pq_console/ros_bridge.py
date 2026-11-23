@@ -594,7 +594,7 @@ class RosBridge(Node):
             raise ValueError(f'{node} has no parameter {name}')
         return res.values[0].type, param_value(res.values[0])
 
-    def set_param(self, node, name, value, type_=None):
+    def set_param(self, node, name, value, type_=None, timeout=3.0):
         """Set a parameter; type_ (ParameterType) converts the value (e.g. from JSON)."""
         v = ParameterValue()
         if type_ is None:
@@ -614,7 +614,7 @@ class RosBridge(Node):
         else:
             raise ValueError(f'{name}: parameters of this type cannot be set from the console')
         req = SetParameters.Request(parameters=[Parameter(name=name, value=v)])
-        res = self._call(SetParameters, f'{node}/set_parameters', req)
+        res = self._call(SetParameters, f'{node}/set_parameters', req, timeout)
         r = res.results[0]
         if not r.successful:
             raise RuntimeError(f'{node} {name}: {r.reason}')

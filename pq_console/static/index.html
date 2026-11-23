@@ -101,9 +101,10 @@
 <!-- ================= Cameras: live view, recording, settings ================= -->
 <section id="tab-cameras" class="tab-body hidden">
   <div class="row">
-    <div class="card">
+    <div class="card wide">
       <h2>Cameras</h2>
-      <div id="cameras"></div>
+      <table id="cam-table"></table>
+      <div id="cam-other" class="muted"></div>
       <div class="actions">
         <button id="cam-start">Start cameras</button>
         <button id="cam-stop" class="secondary">Stop cameras</button>
@@ -111,26 +112,21 @@
     </div>
     <div class="card">
       <h2>Recording</h2>
-      <div class="form">
-        <label>Name <input id="rec-name" size="24"></label>
-        <label><input type="checkbox" id="rec-depth" checked> depth</label>
-        <label><input type="checkbox" id="rec-aligned"> depth aligned to RGB</label>
-      </div>
+      <div class="form"><label>Preset <select id="preset"></select></label></div>
+      <div class="form" id="rec-cams"></div>
+      <div class="actions"><button id="streams-apply" class="secondary">Apply streams to the cameras</button></div>
+      <div id="streams-state" class="muted"></div>
+      <div class="form" style="margin-top:10px"><label>Name <input id="rec-name" size="24"></label></div>
       <div id="rec-state" class="muted"></div>
       <div class="actions">
         <button id="rec-start">Start recording</button>
-        <button id="rec-stop" class="danger">Stop recording</button>
+        <button id="rec-stop" class="danger">Stop and save</button>
       </div>
     </div>
   </div>
-  <div class="grid" id="live-previews">
-    <div class="preview" data-slot="0"></div>
-    <div class="preview" data-slot="1"></div>
-    <div class="preview" data-slot="2"></div>
-    <div class="preview" data-slot="3"></div>
-  </div>
-  <div class="card">
-    <h2>Camera settings</h2>
+  <div id="live-previews" class="previews"></div>
+  <details class="card" id="settings-card">
+    <summary class="card-title">Camera settings</summary>
     <div class="form">
       <label><input type="checkbox" id="both" checked> apply to all cameras</label>
       <button id="settings-reload" class="secondary">Reload</button>
@@ -145,7 +141,7 @@
       <input id="settings-filter" placeholder="filter" size="24">
       <div id="settings-other"></div>
     </details>
-  </div>
+  </details>
 </section>
 
 <!-- ================= Rig 3D ================= -->
