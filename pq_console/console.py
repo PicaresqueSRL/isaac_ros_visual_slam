@@ -38,6 +38,7 @@ from urllib.parse import parse_qs, urlparse
 
 import bags as bags_mod
 import config as config_mod
+import rig as rig_mod
 import ros_bridge
 import sessions as sessions_mod
 import yaml
@@ -76,6 +77,7 @@ class Console:
         self.c = config
         self.ros = ros_bridge.start()
         self.sessions = sessions_mod.Sessions(config)
+        self.rigs = rig_mod.Rigs(config.data_dir)
         self.emitter_cache = {'time': 0.0, 'value': {}}
         self.settings_file = os.path.join(config.data_dir, 'camera_settings.yaml')
         self.settings_log = []    # messages of the startup settings
@@ -287,7 +289,10 @@ class Console:
     def plan(self, path, selection, version=None):
         """Profile for the sensors chosen on a bag (mode, notes, YAML)."""
         info = bags_mod.bag_info(path, self.c.roots)
-        profile, notes = bags_mod.build_profile(info, selection)
+        rig = self.rigs.active()
+        profile, notes = bags_mod.build_profile(info, selection, rig_mod.extrinsics(rig))
+        if len({c['device'] for c in profile['cameras']}) > 1:
+            notes.append(f"extrinsics from the rig {rig['name']} (Rig 3D)")
         if profile['mode'] == 'multisensor' and not self.multisensor_ok(version):
             raise ValueError('these sensors need the multisensor mode: cuVSLAM >= 17')
         return profile, notes
@@ -329,6 +334,16 @@ class Console:
             self.sessions.start_recording(body.get('name', ''), preset, cameras)
             threading.Thread(target=self.write_recording_settings, args=(body['name'],),
                              daemon=True).start()
+        elif name == 'rig/save':
+            rig = self.rigs.save(body['rig'])
+            if body.get('activate', True):
+                self.rigs.set_active(rig['name'])
+            self.sessions.chown(self.rigs.dir)
+            return rig
+        elif name == 'rig/activate':
+            self.rigs.set_active(body['name'])
+        elif name == 'rig/import':
+            return rig_mod.import_text(body.get('filename', ''), body.get('text', ''))
         elif name == 'streams/apply':
             return self.apply_streams(body['preset'], body.get('cameras') or [])
         elif name == 'record/stop':
@@ -417,6 +432,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(c.sessions.runs())
             if url.path == '/api/profiles':
                 return self.send_json(c.sessions.profiles(q.get('version')))
+            if url.path == '/api/rigs':
+                active = c.rigs.active()
+                names = c.rigs.names()
+                if rig_mod.DEFAULT_RIG['name'] not in names:
+                    names.insert(0, rig_mod.DEFAULT_RIG['name'])
+                return self.send_json({'names': names, 'active': active['name'],
+                                       'models': rig_mod.MODELS})
+            if url.path == '/api/rig':
+                return self.send_json(c.rigs.load(q['name']))
             if url.path == '/api/cameras':
                 return self.send_json(c.cameras_info())
             if url.path == '/api/camera_settings':

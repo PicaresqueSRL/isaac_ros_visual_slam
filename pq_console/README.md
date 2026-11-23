@@ -45,7 +45,14 @@ containers mount them at the same path.
   cameras; *Save as startup settings* writes `data_dir/camera_settings.yaml`, applied after
   *Start cameras*. The parameters of the drivers at the start of each recording are saved in
   `bags/<name>.camera_settings.yaml`.
-- **Rig 3D**: (next) cameras in 3D, coordinates import, camera models.
+- **Rig 3D**: the cameras in 3D (three.js, from a CDN: the browser needs internet), with their
+  sensors (IR left and right, RGB, IMU) and fields of view; orbit, pan, zoom; select a camera
+  and move or rotate it with the gizmo or the numbers (pose of its link: x forward, y left,
+  z up; roll pitch yaw in degrees). Import of coordinates (CSV `name, x, y, z, roll, pitch, yaw
+  [, model]`, rig YAML or a pq_cuvslam profile), export YAML, camera models (D455 for now). The
+  overlap of the views at 2-4 m is computed for each pair, as cuVSLAM checks it. Rigs are
+  saved in `data_dir/rigs/`; *Use for SLAM* makes a rig the source of the extrinsics of the
+  profiles built from sensors on the Bags page.
 - **Graph**: ROS nodes and topics; rates on request.
 
 cuVSLAM builds: `cuvslam_versions` in the configuration maps a label to an image and/or an
@@ -56,6 +63,7 @@ install folder; profiles and sensors that need the Multisensor mode are refused 
 - `console.py`: HTTP server (Python standard library): page, JSON API, JPEG previews (all the
   visible ones in one request: browsers open at most 6 connections to a host).
 - `bags.py`: folder browsing, content of a bag, profiles for the chosen sensors.
+- `rig.py`: camera models, rig files, import of coordinates, extrinsics between cameras.
 - `ros_bridge.py`: ROS node (graph, rates, previews, SLAM state with landmarks, parameters of
   the camera drivers). Light by design: image and landmark topics are not received
   continuously; their latest sample is taken only when the page asks (history 1, node not spun

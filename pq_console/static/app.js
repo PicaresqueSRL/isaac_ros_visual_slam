@@ -96,6 +96,8 @@ function setTab(t) {
   renderLivePreviews();
   renderBagPreviews();
   if (t === 'graph') refreshTopics();
+  // rig.js is a module (three.js), loaded after this script: it picks up rigPending.
+  if (window.rigTab) window.rigTab(t === 'rig'); else window.rigPending = t === 'rig';
   if (t === 'cameras') { refreshCameras(); if ($('settings-card').open) refreshSettings(); }
 }
 
