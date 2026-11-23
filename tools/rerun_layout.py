@@ -25,11 +25,18 @@ Runs in the pq_cuvslam container (rosbag2_py) with rerun-sdk and pyarrow<19 inst
 separate folder appended to the Python path (the ROS numpy 1.x is kept):
   pip install --target <pylib> rerun-sdk "pyarrow<19"
 
+With --slam-bag (the bag of the SLAM output, with visual_slam/events): the events (loop
+closures, tracker resets, rejected odometry, camera switches) in a log panel, and a marker on
+the trajectory where each loop closure happened. The loop closure landmarks (vis/loop_closure_cloud)
+are drawn in red.
+
 Usage:
-  rerun_layout.py <to_rerun.py MCAP folder> <out.rrd> [--pylib <folder>]
+  rerun_layout.py <to_rerun.py MCAP folder> <out.rrd> [--slam-bag <bag>] [--pylib <folder>]
 """
 
 import argparse
+import bisect
+import re
 import sys
 
 import numpy as np
@@ -41,8 +48,13 @@ TRAJECTORIES = {
     'cam2_vio/odometry_guarded': ('cam2/guarded', [40, 170, 60], 0.02),
     'cam1_vio/odometry': ('cam1/raw', [150, 170, 210], 0.01),
     'cam2_vio/odometry': ('cam2/raw', [160, 200, 160], 0.01),
-    'odometry': ('odometry', [230, 40, 40], 0.03),
+    'odometry_guarded': ('guarded', [40, 110, 230], 0.03),
+    'odometry': ('raw', [150, 170, 210], 0.01),
 }
+EVENT_NAMES = {1: 'tracking lost', 2: 'tracking recovered', 3: 'loop closure', 4: 'configured',
+               5: 'tracker initialized', 6: 'pose rejected', 7: 'pose accepted',
+               8: 'tracker reset', 9: 'camera switch'}
+LOOP_CLOSURE = 3
 CAMERAS = {
     '/cam2/infra1/image_rect_raw/compressed': 'cameras/cam2/ir',
     '/cam2/color/image_raw/compressed': 'cameras/cam2/rgb',
@@ -68,6 +80,7 @@ def main():
     ap.add_argument('mcap')
     ap.add_argument('out')
     ap.add_argument('--pylib', default='', help='folder with rerun-sdk (appended to sys.path)')
+    ap.add_argument('--slam-bag', default='', help='SLAM output bag with visual_slam/events')
     args = ap.parse_args()
     if args.pylib:
         sys.path.append(args.pylib)
@@ -82,7 +95,10 @@ def main():
     blueprint = rrb.Blueprint(
         rrb.Horizontal(
             rrb.Grid(*image_views, grid_columns=2),
-            rrb.Spatial3DView(origin='world', name='SLAM'),
+            rrb.Vertical(
+                rrb.Spatial3DView(origin='world', name='SLAM'),
+                rrb.TextLogView(origin='events', name='Events'),
+                row_shares=[4, 1]),
             column_shares=[1, 1]),
         collapse_panels=True)
     rr.init('pq_cuvslam')
@@ -95,6 +111,7 @@ def main():
     types = {t.name: t.type for t in reader.get_all_topics_and_types()}
     classes = {}
     counts = {}
+    poses = {}   # trajectory entity -> ([stamp ns], [xyz]) for the loop closure markers
     while reader.has_next():
         topic, data, t = reader.read_next()
         type_ = types[topic]
@@ -116,6 +133,9 @@ def main():
                     entity = f'world/{ent}'
                     if suffix == '/pose':
                         p, q = msg.pose.position, msg.pose.orientation
+                        stamps, xyz = poses.setdefault(entity, ([], []))
+                        stamps.append(stamp)
+                        xyz.append([p.x, p.y, p.z])
                         rr.log(entity + '/pose', rr.Transform3D(
                             translation=[p.x, p.y, p.z],
                             quaternion=rr.Quaternion(xyzw=[q.x, q.y, q.z, q.w])),
@@ -136,16 +156,69 @@ def main():
                             [pts], colors=[[200, 120, 0]], radii=[0.01]))
                     else:
                         rr.log(entity, rr.Points3D(pts, colors=[[200, 120, 0]], radii=[0.02]))
+        elif type_ == 'sensor_msgs/msg/PointCloud2' and 'loop_closure' in topic:
+            cam = 'cam1' if topic.startswith('/cam1') else 'cam2' if topic.startswith('/cam2') else 'slam'
+            entity = f'world/{cam}/loop_closure_landmarks'
+            rr.log(entity, rr.Points3D(cloud_xyz(msg), colors=[[230, 40, 40]], radii=[0.02]))
         elif type_ == 'sensor_msgs/msg/PointCloud2' and 'landmarks' in topic:
-            cam = 'cam1' if topic.startswith('/cam1') else 'cam2'
+            cam = 'cam1' if topic.startswith('/cam1') else 'cam2' if topic.startswith('/cam2') else 'slam'
             entity = f'world/{cam}/landmarks'
-            color = [90, 140, 240] if cam == 'cam1' else [90, 200, 110]
+            color = {'cam1': [90, 140, 240], 'cam2': [90, 200, 110]}.get(cam, [140, 140, 140])
             rr.log(entity, rr.Points3D(cloud_xyz(msg), colors=[color], radii=[0.01]))
         if entity:
             counts[entity] = counts.get(entity, 0) + 1
+    if args.slam_bag:
+        log_events(rr, args.slam_bag, poses, counts)
     print(f'written {args.out}')
     for e, n in sorted(counts.items()):
         print(f'  {e}: {n}')
+
+
+def log_events(rr, bag, poses, counts):
+    """Events of the SLAM output bag as text logs, loop closures as markers on the trajectory."""
+    from rclpy.serialization import deserialize_message
+    import rosbag2_py
+    from rosidl_runtime_py.utilities import get_message
+    reader = rosbag2_py.SequentialReader()
+    reader.open(rosbag2_py.StorageOptions(uri=bag, storage_id=''),
+                rosbag2_py.ConverterOptions('cdr', 'cdr'))
+    types = {t.name: t.type for t in reader.get_all_topics_and_types()}
+    topics = [t for t in types if re.search(r'visual_slam/events$', t)]
+    if not topics:
+        print(f'{bag}: no visual_slam/events')
+        return
+    try:
+        event_type = get_message(types[topics[0]])
+    except (ImportError, ModuleNotFoundError, AttributeError) as e:
+        print(f'events skipped: {e} (source the pq_cuvslam workspace)')
+        return
+    reader.set_filter(rosbag2_py.StorageFilter(topics=topics))
+    markers = {}
+    while reader.has_next():
+        topic, data, t = reader.read_next()
+        e = deserialize_message(data, event_type)
+        stamp = e.header.stamp.sec * 1_000_000_000 + e.header.stamp.nanosec or t
+        ns = topic.split('/visual_slam')[0].strip('/')            # cam1_vio, cam2_vio or ''
+        cam = ns.replace('_vio', '') or 'slam'
+        name = EVENT_NAMES.get(e.type, str(e.type))
+        rr.set_time('time', timestamp=np.datetime64(stamp, 'ns'))
+        level = 'WARN' if e.type in (1, 6, 8) else 'INFO'
+        rr.log(f'events/{cam}', rr.TextLog(f'{name}: {e.description}', level=level))
+        counts[f'events/{cam}'] = counts.get(f'events/{cam}', 0) + 1
+        if e.type != LOOP_CLOSURE:
+            continue
+        # Marker at the pose of the trajectory of the tracker at the time of the loop closure.
+        candidates = [f'world/{cam}/guarded', f'world/{cam}/raw'] if ns else \
+            ['world/guarded', 'world/raw', 'world/odometry']
+        traj = next((c for c in candidates if c in poses), None)
+        if traj is None:
+            continue
+        stamps, xyz = poses[traj]
+        i = min(bisect.bisect_left(stamps, stamp), len(stamps) - 1)
+        pts = markers.setdefault(cam, [])
+        pts.append(xyz[i])
+        rr.log(f'world/{cam}/loop_closures', rr.Points3D(pts, colors=[[255, 200, 0]], radii=[0.08]))
+        counts[f'world/{cam}/loop_closures'] = len(pts)
 
 
 if __name__ == '__main__':
