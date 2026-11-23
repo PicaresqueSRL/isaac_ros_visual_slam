@@ -15,6 +15,7 @@ container.
 | `mono_scale.py` | Metric scale of a Mono run from the IMU: vertical oscillations of the walk (band 1-3 Hz) in the visual positions and in the double-integrated accelerometer, on sliding windows; evaluation against a metric reference run; scaled `odometry.csv` |
 | `scale_recording.py` | Applies a constant scale to a SLAM recording (MCAP): odometry, paths, landmarks, map/odom TF |
 | `to_rerun.py` | MCAP for Rerun from a SLAM recording, with the camera images of the source bag (JPEG) on the sensor time; optional scale |
+| `rerun_layout.py` | `.rrd` for the Rerun viewer with a fixed layout (cam2 IR/RGB on top, cam1 IR/RGB below, SLAM 3D on the right) from the MCAP of `to_rerun.py`; needs rerun-sdk (see the script) |
 | `record_slam.sh` | Replays a bag (real time by default, `MODE=offline` for all frames) and records the SLAM output to MCAP, plus the Rerun MCAP with the RGB images and the CSV files |
 | `run_bag.sh` | Plays a bag at real-time speed with `ros2 bag play` and records the output topics (live-like run) |
 
