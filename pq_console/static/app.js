@@ -51,7 +51,7 @@ async function post(name, body = {}) {
   } catch (e) { showError(name + ': ' + e.message); throw e; }
 }
 const q = (path, params) => path + '?' + new URLSearchParams(params).toString();
-const fmtBytes = (b) => b == null ? '' : b > 1e9 ? (b / 1e9).toFixed(1) + ' GB' : (b / 1e6).toFixed(0) + ' MB';
+const fmtBytes = (b) => b == null ? '' : b > 1e9 ? (b / 1e9).toFixed(1) + ' GB' : b > 1e6 ? (b / 1e6).toFixed(0) + ' MB' : (b / 1e3).toFixed(0) + ' kB';
 const fmtDur = (s) => { s = Math.round(s || 0); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
 const fmtDate = (t) => t ? new Date(t * 1000).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '';
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -374,7 +374,7 @@ function showProfile() {
 }
 $('profile').onchange = () => { save('profile', $('profile').value); showProfile(); };
 $('slam-start').onclick = async () => {
-  const body = { path: bag.path, version: $('version').value, rerun: $('rerun').checked };
+  const body = { path: bag.path, version: $('version').value, rerun: $('rerun').checked, save: $('save-results').checked };
   if (slamSource() === 'profile') body.profile = $('profile').value;
   else if (!planOk) { showError('the chosen sensors do not make a valid configuration'); return; }
   else body.selection = selection();
@@ -383,6 +383,9 @@ $('slam-start').onclick = async () => {
   refreshState();
 };
 $('slam-stop').onclick = () => confirm('Stop the SLAM?') && post('job/stop').then(refreshState);
+$('save-results').checked = load('save_results', true);
+$('rerun').disabled = !$('save-results').checked;
+$('save-results').onchange = () => { save('save_results', $('save-results').checked); $('rerun').disabled = !$('save-results').checked; };
 
 // What the SLAM run saves and where: shown while it runs and when it ends.
 function renderOutput(j) {
@@ -392,6 +395,12 @@ function renderOutput(j) {
     return;
   }
   const m = j.meta, o = m.outputs, sv = m.saved || {};
+  if (m.save === false) {   // test run
+    const r = m.result ? ` · ${m.result.frames} frames, path ${m.result.path_m} m, start-end ${m.result.start_end_m} m` : '';
+    el.className = 'output run';
+    el.innerHTML = `<b>${j.state === 'running' ? '● test run: shown live, nothing will be saved' : '■ test run finished: nothing saved'}</b>${esc(r)}`;
+    return;
+  }
   const item = (label, path, key) => {
     if (!path) return '';
     const mark = j.state === 'running' && !(key in sv) ? '…' : sv[key] ? '✓' : '✗';
@@ -421,8 +430,16 @@ function renderRuns() {
     <td class="num">${r.start_end_m != null ? r.start_end_m + ' m' : ''}</td>
     <td class="num">${rej(r)}</td><td class="num">${ev(r, 'tracker_reset')}</td>
     <td class="num">${ev(r, 'loop_closure')}</td><td class="num">${r.track_ms ?? ''}</td>
-    <td>${r.rrd ? `<code>${esc(r.rrd)}</code>` : ''}</td></tr>`).join('') ||
-    '<tr><td colspan="10" class="muted">no runs</td></tr>';
+    <td>${r.rrd ? `<code>${esc(r.rrd)}</code>` : ''}</td><td class="num">${fmtBytes(r.size)}</td>
+    <td><button class="small danger" data-delrun="${esc(r.name)}" title="Delete the run, its SLAM bag and Rerun file">🗑</button></td></tr>`).join('') ||
+    '<tr><td colspan="12" class="muted">no runs</td></tr>';
+  const total = runs.reduce((a, r) => a + (r.size || 0), 0);
+  $('runs-size').textContent = runs.length ? `${runs.length} runs · ${fmtBytes(total)}` : '';
+  $('runs').querySelectorAll('[data-delrun]').forEach((b) => b.onclick = async () => {
+    if (!confirm(`Delete ${b.dataset.delrun}: run output, SLAM bag and Rerun file?`)) return;
+    await post('run/delete', { name: b.dataset.delrun }).catch(() => {});
+    loadBag(bag.path);
+  });
 }
 
 // ---- SLAM live view ----

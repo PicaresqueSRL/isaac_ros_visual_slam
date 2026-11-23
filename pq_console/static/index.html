@@ -62,6 +62,7 @@
           <label><input type="radio" name="slam-src" value="profile" checked> profile</label>
           <label><input type="radio" name="slam-src" value="sensors"> choose the sensors</label>
           <label>cuVSLAM <select id="version"></select></label>
+          <label title="Off: a test run, seen live, nothing kept on disk"><input type="checkbox" id="save-results" checked> Save results</label>
           <label><input type="checkbox" id="rerun" checked> Rerun file</label>
         </div>
         <div id="slam-profile" class="slam-src">
@@ -105,10 +106,10 @@
       </div>
 
       <div class="card">
-        <h2>SLAM runs of this bag</h2>
+        <h2>SLAM runs of this bag <span id="runs-size" class="muted small-text"></span></h2>
         <table id="runs"><thead><tr>
           <th>Name</th><th>Mode</th><th>Frames</th><th>Path</th><th>Start-end</th><th>Rejected</th>
-          <th>Resets</th><th>Loop closures</th><th>track()</th><th>Rerun file</th>
+          <th>Resets</th><th>Loop closures</th><th>track()</th><th>Rerun file</th><th>Size</th><th></th>
         </tr></thead><tbody></tbody></table>
         <pre id="job-log"></pre>
       </div>

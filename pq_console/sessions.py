@@ -347,11 +347,14 @@ class Sessions:
         install = ['-v', f"{v['install_dir']}:/ws/install:ro"] if v.get('install_dir') else []
         return label, v.get('image') or self.c.slam_image, install + list(self.c.slam_extra_args)
 
-    def start_replay(self, path, profile=None, custom=None, version=None, rate=1.0, rerun=True):
+    def start_replay(self, path, profile=None, custom=None, version=None, rate=1.0, rerun=True,
+                     save=True):
         """
         SLAM on a bag played in real time, as live.
 
         profile: name of an installed profile or 'dual'; custom: profile dict built by the console.
+        save: False for a test run: nothing is kept (no SLAM bag, no Rerun file, the run output is
+        deleted once summarized).
         """
         with self.lock:
             self.check_idle()
@@ -365,14 +368,17 @@ class Sessions:
                                       ('' if label == next(iter(self.versions())) else f'_{label}'))
             job = Job('replay', name)
             job.meta = self.bag_meta(path)
+            if not save:
+                name = f'test_{name}'
+                job.name = name
             job.meta.update(rate=float(rate), profile=profile, version=label, phase='starting',
+                            save=bool(save), saved={},
                             # Where the SLAM output is saved (shown in the page while it runs).
                             outputs={'run': os.path.join(self.c.runs_dir, name),
                                      'slam_bag': os.path.join(self.c.slam_bags_dir, f'{name}_slam'),
                                      'rerun': os.path.join(self.c.rerun_dir, f'{name}.rrd')
                                      if rerun and self.c.tools_dir and self.c.pylib_dir else '',
-                                     'log': os.path.join(self.c.runs_dir, f'{name}.log')},
-                            saved={})
+                                     'log': os.path.join(self.c.runs_dir, f'{name}.log')} if save else {})
             self.job = job
         threading.Thread(target=self._replay, args=(job, path, profile, custom, label, float(rate),
                                                     rerun), daemon=True).start()
@@ -405,17 +411,19 @@ class Sessions:
                 f'exec ros2 launch pq_cuvslam {launch} > /out/{name}.log 2>&1')
             if code:
                 raise RuntimeError(out)
-            os.makedirs(c.slam_bags_dir, exist_ok=True)
-            self.chown_rm(os.path.join(c.slam_bags_dir, f'{name}_slam'))
-            code, out = docker(
-                'run', '-d', '--name', 'pq_slamrec', *self.ros_args(), *args,
-                '-v', f'{c.slam_bags_dir}:/out', '--entrypoint', 'bash', image, '-c',
-                'source /opt/ros/lyrical/setup.bash; source /ws/install/setup.bash; '
-                'exec ros2 bag record -s mcap --storage-preset-profile zstd_fast '
-                f"--include-unpublished-topics -o /out/{name}_slam --regex '{SLAM_TOPICS_RE}' "
-                f'> /out/{name}_slam.log 2>&1')
-            if code:
-                raise RuntimeError(out)
+            save = job.meta['save']
+            if save:   # SLAM output bag (odometries, landmarks, diagnostics, events)
+                os.makedirs(c.slam_bags_dir, exist_ok=True)
+                self.chown_rm(os.path.join(c.slam_bags_dir, f'{name}_slam'))
+                code, out = docker(
+                    'run', '-d', '--name', 'pq_slamrec', *self.ros_args(), *args,
+                    '-v', f'{c.slam_bags_dir}:/out', '--entrypoint', 'bash', image, '-c',
+                    'source /opt/ros/lyrical/setup.bash; source /ws/install/setup.bash; '
+                    'exec ros2 bag record -s mcap --storage-preset-profile zstd_fast '
+                    f"--include-unpublished-topics -o /out/{name}_slam --regex '{SLAM_TOPICS_RE}' "
+                    f'> /out/{name}_slam.log 2>&1')
+                if code:
+                    raise RuntimeError(out)
             time.sleep(8)   # nodes active and recorder subscribed before the first frame
             job.info(f'play {path} at rate {rate}')
             job.meta['phase'] = 'running'
@@ -435,16 +443,24 @@ class Sessions:
                 docker('rm', '-f', n)
             run = (self.run_summary(os.path.join(c.runs_dir, name)) or
                    self.dual_summary(os.path.join(c.runs_dir, name)))
-            out = job.meta['outputs']
-            saved = job.meta['saved']
-            saved['run'] = bool(run)
-            saved['slam_bag'] = os.path.isfile(os.path.join(out['slam_bag'], 'metadata.yaml'))
             if run:
                 keys = ('frames', 'path_m', 'start_end_m')
                 job.meta['result'] = {k: run[k] for k in keys if k in run}
                 job.info('run: ' + ', '.join(f'{k} {run[k]}' for k in keys if k in run))
             else:
                 job.info(f'no run output: see {c.runs_dir}/{name}.log')
+            if not save:   # test run: nothing kept
+                self.delete_run(name)
+                job.info('test run: output deleted')
+                job.meta['phase'] = 'done'
+                job.state = 'stopped' if job.stop_event.is_set() else 'done'
+                job.finished = time.time()
+                job.info(job.state)
+                return
+            out = job.meta['outputs']
+            saved = job.meta['saved']
+            saved['run'] = bool(run)
+            saved['slam_bag'] = os.path.isfile(os.path.join(out['slam_bag'], 'metadata.yaml'))
             if out['rerun'] and not job.stop_event.is_set():
                 job.info('Rerun conversion')
                 job.meta['phase'] = 'rerun'
@@ -458,6 +474,32 @@ class Sessions:
             job.state = 'failed'
         job.finished = time.time()
         job.info(job.state)
+
+    def delete_run(self, name):
+        """Everything of a run: output folder, log, SLAM bag, Rerun files."""
+        if not bags_mod.safe_name(name) == name or not name:
+            raise ValueError(f'invalid run name {name!r}')
+        if self.job and self.job.state == 'running' and self.job.name == name:
+            raise ValueError(f'{name} is running')
+        c = self.c
+        paths = [os.path.join(c.runs_dir, name), os.path.join(c.runs_dir, f'{name}.log'),
+                 os.path.join(c.slam_bags_dir, f'{name}_slam'),
+                 os.path.join(c.slam_bags_dir, f'{name}_slam.log')] + \
+            [os.path.join(c.rerun_dir, f'{name}.{ext}') for ext in ('rrd', 'mcap', 'log')]
+        existing = [p for p in paths if os.path.lexists(p)]
+        if existing:   # files written by root containers
+            mounts = []
+            for d in sorted({os.path.dirname(p) for p in existing}):
+                mounts += ['-v', f'{d}:{d}']
+            docker('run', '--rm', *mounts, '--entrypoint', 'rm', self.c.slam_image, '-rf', *existing)
+        return len(existing)
+
+    def run_size(self, name):
+        c = self.c
+        paths = (os.path.join(c.runs_dir, name), os.path.join(c.slam_bags_dir, f'{name}_slam'),
+                 os.path.join(c.rerun_dir, f'{name}.rrd'), os.path.join(c.rerun_dir, f'{name}.mcap'))
+        return sum(dir_size(p) if os.path.isdir(p) else os.path.getsize(p)
+                   for p in paths if os.path.exists(p))
 
     def chown_rm(self, path):
         if os.path.exists(path):
@@ -591,6 +633,7 @@ class Sessions:
             if os.path.isdir(path):
                 r = self.run_summary(path) or self.dual_summary(path)
                 if r:
+                    r['size'] = self.run_size(r['name'])
                     out.append(r)
         return sorted(out, key=lambda r: r['time'], reverse=True)
 

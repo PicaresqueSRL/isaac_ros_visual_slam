@@ -362,7 +362,9 @@ class Console:
             self.ros.slam.reset()
             return {'name': self.sessions.start_replay(
                 body['path'], body.get('profile'), custom, body.get('version'),
-                body.get('rate', 1.0), bool(body.get('rerun', True)))}
+                body.get('rate', 1.0), bool(body.get('rerun', True)), bool(body.get('save', True)))}
+        elif name == 'run/delete':
+            return {'deleted': self.sessions.delete_run(body['name'])}
         elif name == 'view/start':
             self.ros.slam.reset()
             return {'name': self.sessions.start_view(body['path'], body.get('rate', 1.0),
