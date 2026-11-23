@@ -26,6 +26,7 @@ This file records every change made to it. Update it with each change.
 | Diagnostics | `visual_slam/status`, `/diagnostics` | also `visual_slam/diagnostics/frame` (per-frame times, observations, stream saturation, valid depth) and `visual_slam/events` (`pq_cuvslam_interfaces`) |
 | IMU queue | SENSOR_DATA depth (5) | 400 messages (`imu_qos_depth`): no IMU samples lost in real time |
 | Odometry health | none | per-frame check (speed, rotation against the gyroscope, landmarks) and `visual_slam/tracking/odometry_guarded` without the rejected increments |
+| Cameras | one tracker per node | `dual_vio.launch.py`: VIO of cam1 and cam2 in parallel and an odometry selector (`visual_slam/tracking/odometry_fused`) |
 | Run output | topics only | also CSV + `run_info.json` (`run_output_dir`), format of `run_output.py` |
 | Build | Isaac ROS container | `docker/Dockerfile` (ROS 2 Lyrical, Ubuntu 24.04, CUDA 13) |
 | Configuration | launch parameters + remappings + `static_transform_publisher` | YAML profiles (`profile`): cameras, topics, frames, IMU, depth, extrinsics with source, mode |
@@ -300,6 +301,19 @@ This file records every change made to it. Update it with each change.
   trackers are recreated with the same rig and configuration; the guarded odometry continues.
   Event `tracker_reset`. No effect on clean bags; helps when the VIO diverges and the images are
   good again (elevator_down_107 2.85 -> 1.53 m); no gain on saturated images.
+
+### 2026-11-23
+
+**Odometry selector, dual VIO** (`221d4e3`, `4bbf958`)
+- `impl/odometry_selector` and `odometry_selector_node`: the guarded odometries and the health of
+  two trackers on the rigid holder; the fused odometry (cam2 base frame) follows the primary
+  (cam1) and switches after 3 bad frames in 0.5 s, back after 2 s of good frames; the motion
+  during the detection delay is taken from the new tracker. `launch/dual_vio.launch.py`.
+- The run output of pq_cuvslam is written from a pre-shutdown callback (several nodes in one
+  container: the process could end before every node was destroyed).
+- Real-time replays: the fused odometry follows cam1 VIO where cam1 is healthy (staircases_102
+  0.59 deg against 1.27 deg with cam2); with frequent switches (elevator_down_107) it is worse
+  than either camera: switching policy to refine.
 
 ## Notes
 
