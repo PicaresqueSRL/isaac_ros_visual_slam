@@ -16,8 +16,10 @@
 //
 // Virtual camera given to cuVSLAM instead of a physical one: the image undistorted to a
 // pinhole camera with the same focal length (cuNLS, used by the Multisensor mode, supports
-// pinhole cameras only), optionally extended with empty bands at the top (principal point
-// moved down by the same amount) and at the bottom. Every real pixel keeps its viewing ray, so
+// pinhole cameras only), optionally extended with empty bands at the top and on the left
+// (principal point moved by the same amount), at the bottom and on the right. The side bands
+// give cameras of different width the same resolution (e.g. a 640x480 RGB with 848x480 IR, as
+// the Multisensor mode requires). Every real pixel keeps its viewing ray, so
 // the geometry is exact; the extended field of view lets the frustum overlap check of cuVSLAM
 // (> 50 % of the points of one camera visible in the other one, at 2-4 m; all cameras with the
 // same resolution) accept two cameras whose real views overlap less, e.g. cam1 looking 49 deg
@@ -44,7 +46,9 @@ struct VirtualCamera
 {
   int pad_top = 0;
   int pad_bottom = 0;
-  uint32_t width = 0;
+  int pad_left = 0;
+  int pad_right = 0;
+  uint32_t width = 0;            // with the bands
   uint32_t height = 0;           // with the bands
   cv::Mat map1, map2;            // remap tables, virtual pixel -> source pixel
   sensor_msgs::msg::CameraInfo::ConstSharedPtr info;   // virtual intrinsics (pinhole)
@@ -53,12 +57,14 @@ struct VirtualCamera
 // Builds the virtual camera of a physical one (plumb_bob, rational_polynomial or pinhole
 // calibration). Throws std::invalid_argument for other distortion models.
 VirtualCamera MakeVirtualCamera(
-  const sensor_msgs::msg::CameraInfo & info, bool undistort, int pad_top, int pad_bottom = 0);
+  const sensor_msgs::msg::CameraInfo & info, bool undistort, int pad_top, int pad_bottom = 0,
+  int pad_left = 0, int pad_right = 0);
 
 // The image in the virtual camera (mono8, mono16, rgb8, bgr8); nullptr for other encodings or
-// sizes different from the calibration.
+// sizes different from the calibration. nearest: nearest-neighbour sampling, for depth images
+// (interpolating across a depth edge would create points that do not exist).
 std::shared_ptr<sensor_msgs::msg::Image> ApplyVirtualCamera(
-  const VirtualCamera & camera, const sensor_msgs::msg::Image & image);
+  const VirtualCamera & camera, const sensor_msgs::msg::Image & image, bool nearest = false);
 
 }  // namespace visual_slam
 }  // namespace pq

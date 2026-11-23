@@ -16,6 +16,7 @@
 
 #include "pq_cuvslam/impl/profile.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <set>
@@ -223,7 +224,7 @@ Profile LoadProfile(const std::string & path)
       c.undistort = r.As<bool>(cameras[i]["undistort"], w + "undistort");
     }
     for (const auto & [key, value] : {std::pair<const char *, int *>{"pad_top", &c.pad_top},
-        {"pad_bottom", &c.pad_bottom}})
+        {"pad_bottom", &c.pad_bottom}, {"pad_left", &c.pad_left}, {"pad_right", &c.pad_right}})
     {
       if (cameras[i][key]) {
         *value = r.As<int>(cameras[i][key], w + key);
@@ -251,14 +252,23 @@ Profile LoadProfile(const std::string & path)
   }
 
   if (const YAML::Node depth = root["depth"]; depth && !depth.IsNull()) {
-    ProfileDepth d;
-    d.topic = r.String(depth, "topic", "depth.");
-    d.camera_index = r.As<int>(r.Required(depth, "camera_index", "depth."), "depth.camera_index");
-    d.scale = r.Number(depth, "scale", "depth.");
-    if (depth["stereo_tracking"]) {
-      d.stereo_tracking = r.As<bool>(depth["stereo_tracking"], "depth.stereo_tracking");
+    const auto parse = [&r](const YAML::Node & node, const std::string & w) {
+        ProfileDepth d;
+        d.topic = r.String(node, "topic", w);
+        d.camera_index = r.As<int>(r.Required(node, "camera_index", w), w + "camera_index");
+        d.scale = r.Number(node, "scale", w);
+        if (node["stereo_tracking"]) {
+          d.stereo_tracking = r.As<bool>(node["stereo_tracking"], w + "stereo_tracking");
+        }
+        return d;
+      };
+    if (depth.IsSequence()) {
+      for (size_t i = 0; i < depth.size(); ++i) {
+        p.depths.push_back(parse(depth[i], "depth[" + std::to_string(i) + "]."));
+      }
+    } else {
+      p.depths.push_back(parse(depth, "depth."));
     }
-    p.depth = d;
   }
 
   if (const YAML::Node extrinsics = root["extrinsics"]; extrinsics && !extrinsics.IsNull()) {
@@ -345,8 +355,15 @@ std::vector<std::pair<std::string, YAML::Node>> ProfileParameters(const Profile 
     case ProfileMode::MULTISENSOR:
       set("tracking_mode", 4);
       set("multisensor_use_imu", p.imu.has_value());
-      if (!p.depth) {
-        set("depth_camera_id", -1);
+      {
+        std::vector<int> ids;
+        for (const auto & d : p.depths) {
+          ids.push_back(d.camera_index);
+        }
+        set("depth_camera_id", ids.empty() ? -1 : ids.front());
+        if (!ids.empty()) {
+          set("depth_camera_ids", ids);
+        }
       }
       break;
   }
@@ -366,10 +383,12 @@ std::vector<std::pair<std::string, YAML::Node>> ProfileParameters(const Profile 
     set("accel_random_walk", p.imu->accel_random_walk);
     set("calibration_frequency", p.imu->frequency);
   }
-  if (p.depth) {
-    set("depth_camera_id", p.depth->camera_index);
-    set("depth_scale_factor", p.depth->scale);
-    set("depth_enable_stereo_tracking", p.depth->stereo_tracking);
+  if (!p.depths.empty()) {
+    if (p.mode != ProfileMode::MULTISENSOR) {
+      set("depth_camera_id", p.depths.front().camera_index);
+    }
+    set("depth_scale_factor", p.depths.front().scale);
+    set("depth_enable_stereo_tracking", p.depths.front().stereo_tracking);
   }
   for (const auto & [name, value] : p.parameters) {
     out.emplace_back(name, value);
@@ -402,8 +421,10 @@ ProfileCheck CheckProfile(const Profile & p, int cuvslam_major, bool multisensor
       }
       break;
     case ProfileMode::RGBD:
-      if (!p.depth) {
-        check.errors.push_back("mode rgbd needs the depth section");
+      if (p.depths.size() != 1) {
+        check.errors.push_back(
+          "mode rgbd needs exactly one depth (depth section); the profile has " +
+          std::to_string(p.depths.size()));
       }
       break;
     case ProfileMode::MONO:
@@ -421,7 +442,7 @@ ProfileCheck CheckProfile(const Profile & p, int cuvslam_major, bool multisensor
       } else if (!multisensor_available) {
         check.errors.push_back(
           "mode multisensor needs cuVSLAM built with cuNLS (USE_CUNLS)");
-      } else if (!p.depth && n < 2) {
+      } else if (p.depths.empty() && n < 2) {
         check.errors.push_back(
           "mode multisensor needs a depth image (depth section) or at least two cameras with "
           "overlapping views (cuVSLAM rejects a single camera without depth, with or without IMU)");
@@ -430,12 +451,28 @@ ProfileCheck CheckProfile(const Profile & p, int cuvslam_major, bool multisensor
       break;
   }
 
-  if (p.depth && p.depth->camera_index >= static_cast<int>(n)) {
-    check.errors.push_back(
-      "depth.camera_index " + std::to_string(p.depth->camera_index) + " but the profile has " +
-      std::to_string(n) + " cameras");
+  std::vector<int> depth_cameras;
+  for (const auto & d : p.depths) {
+    const bool repeated =
+      std::find(depth_cameras.begin(), depth_cameras.end(), d.camera_index) != depth_cameras.end();
+    if (d.camera_index < 0 || d.camera_index >= static_cast<int>(n)) {
+      check.errors.push_back(
+        "depth camera_index " + std::to_string(d.camera_index) + " but the profile has " +
+        std::to_string(n) + " cameras");
+    } else if (repeated) {
+      check.errors.push_back(
+        "two depth images for camera_index " + std::to_string(d.camera_index));
+    }
+    depth_cameras.push_back(d.camera_index);
+    if (d.scale != p.depths.front().scale ||
+      d.stereo_tracking != p.depths.front().stereo_tracking)
+    {
+      check.errors.push_back(
+        "all depth images need the same scale and stereo_tracking (cuVSLAM applies one setting "
+        "to all of them)");
+    }
   }
-  if (p.depth && p.mode != ProfileMode::RGBD && p.mode != ProfileMode::MULTISENSOR) {
+  if (!p.depths.empty() && p.mode != ProfileMode::RGBD && p.mode != ProfileMode::MULTISENSOR) {
     check.warnings.push_back("depth section ignored in mode " + mode);
   }
   if (p.imu && p.mode != ProfileMode::INERTIAL && p.mode != ProfileMode::MULTISENSOR) {

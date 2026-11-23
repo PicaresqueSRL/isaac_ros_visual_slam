@@ -134,10 +134,9 @@ namespace visual_slam
 
 VisualSlamNode::VisualSlamImpl::VisualSlamImpl(VisualSlamNode & vslam_node)
 : node(vslam_node),
-  sync(node.num_cameras_ + node.num_input_masks_ +
-    (node.UsesDepth() ? 1 : 0),
+  sync(node.num_cameras_ + node.num_input_masks_ + node.NumDepths(),
     1e6 * node.sync_matching_threshold_ms_, node.min_num_images_ +
-    node.num_input_masks_ + (node.UsesDepth() ? 1 : 0),
+    node.num_input_masks_ + node.NumDepths(),
     node.image_buffer_size_),
   sequencer(node.imu_buffer_size_, node.imu_jitter_threshold_ms_, node.image_buffer_size_,
     node.image_jitter_threshold_ms_),
@@ -197,10 +196,12 @@ VisualSlamNode::VisualSlamImpl::VisualSlamImpl(VisualSlamNode & vslam_node)
   // Names and topics of the input images, for the diagnostics.
   for (const auto & [idx, topic] : node.GetImageTopics()) {
     std::string name = "camera_" + std::to_string(idx);
-    if (idx == static_cast<int>(node.num_cameras_ + node.num_input_masks_) &&
-      node.UsesDepth())
-    {
-      name = "depth";
+    if (const int k = node.DepthOfStream(idx); k >= 0) {
+      const auto & cameras = node.profile_ ? node.profile_->cameras :
+        std::vector<ProfileCamera>{};
+      const auto camera = static_cast<size_t>(node.DepthCamera(static_cast<size_t>(k)));
+      name = node.NumDepths() == 1 ? "depth" :
+        "depth_" + (camera < cameras.size() ? cameras[camera].name : std::to_string(camera));
     } else if (node.profile_ && idx < static_cast<int>(node.profile_->cameras.size())) {
       name = node.profile_->cameras[idx].name;
     }
@@ -215,22 +216,22 @@ VisualSlamNode::VisualSlamImpl::VisualSlamImpl(VisualSlamNode & vslam_node)
   health = TrackingHealth(health_config);
 
   // Device synchronization from the profile (two or more devices, multicamera or multisensor
-  // mode without depth).
+  // mode). A depth image goes with the device of the camera it is aligned with.
   if (node.profile_ && node.profile_->sync && node.profile_->sync->mode != SyncMode::NONE &&
     node.profile_->sync->devices.size() >= 2)
   {
     const ProfileSync & s = *node.profile_->sync;
     const bool sync_mode_ok =
       node.tracking_mode_ == static_cast<int>(TrackingMode::MULTICAMERA) ||
-      (node.tracking_mode_ == static_cast<int>(TrackingMode::MULTISENSOR) && !node.UsesDepth());
+      node.tracking_mode_ == static_cast<int>(TrackingMode::MULTISENSOR);
     if (!sync_mode_ok || node.num_input_masks_ > 0) {
       throw std::invalid_argument(
-              "profile sync between devices is supported in multicamera mode and in multisensor "
-              "mode without depth, without masks");
+              "profile sync between devices is supported in multicamera and multisensor mode, "
+              "without masks");
     }
     DeviceSync::Config config;
     config.devices.resize(s.devices.size());
-    camera_device.assign(node.num_cameras_, 0);
+    camera_device.assign(node.num_cameras_ + node.NumDepths(), 0);
     for (size_t i = 0; i < node.profile_->cameras.size(); ++i) {
       for (size_t d = 0; d < s.devices.size(); ++d) {
         if (node.profile_->cameras[i].device == s.devices[d].name) {
@@ -238,6 +239,13 @@ VisualSlamNode::VisualSlamImpl::VisualSlamImpl(VisualSlamNode & vslam_node)
           camera_device[i] = static_cast<int>(d);
         }
       }
+    }
+    // Depth streams: the device of their camera (same capture time on the D455).
+    for (size_t k = 0; k < node.NumDepths(); ++k) {
+      const int stream = node.DepthStreamIndex(k);
+      const int d = camera_device.at(static_cast<size_t>(node.DepthCamera(k)));
+      config.devices[d].push_back(stream);
+      camera_device[static_cast<size_t>(stream)] = d;
     }
     for (const auto & d : s.devices) {
       device_clock_offset_ns.push_back(static_cast<int64_t>(std::llround(d.clock_offset_ms * 1e6)));
@@ -379,18 +387,19 @@ void VisualSlamNode::VisualSlamImpl::Initialize()
   if (node.profile_) {
     for (size_t i = 0; i < node.profile_->cameras.size() && i < node.num_cameras_; ++i) {
       const auto & pc = node.profile_->cameras[i];
-      if (!pc.undistort && pc.pad_top == 0 && pc.pad_bottom == 0) {
+      if (!pc.HasVirtualCamera()) {
         continue;
       }
       const auto & info = *initial_camera_info_messages.at(static_cast<int>(i)).value();
       try {
-        VirtualCamera v = MakeVirtualCamera(info, pc.undistort, pc.pad_top, pc.pad_bottom);
+        VirtualCamera v = MakeVirtualCamera(
+          info, pc.undistort, pc.pad_top, pc.pad_bottom, pc.pad_left, pc.pad_right);
         initial_camera_info_messages[static_cast<int>(i)] = v.info;
         RCLCPP_INFO(
           node.get_logger(),
-          "Camera %s: virtual camera %ux%u (undistort %s, bands %d px top, %d px bottom)",
-          pc.name.c_str(), v.width, v.height, pc.undistort ? "yes" : "no", v.pad_top,
-          v.pad_bottom);
+          "Camera %s: virtual camera %ux%u (undistort %s, bands %d px top, %d px bottom, %d px "
+          "left, %d px right)", pc.name.c_str(), v.width, v.height, pc.undistort ? "yes" : "no",
+          v.pad_top, v.pad_bottom, v.pad_left, v.pad_right);
         virtual_cameras.emplace(static_cast<int>(i), std::move(v));
       } catch (const std::invalid_argument & e) {
         RCLCPP_ERROR(node.get_logger(), "Camera %s: %s", pc.name.c_str(), e.what());
@@ -473,8 +482,10 @@ void VisualSlamNode::VisualSlamImpl::Initialize()
       cam.border_top = std::min(std::max(cam.border_top, v->second.pad_top) + kVirtualMargin, h);
       cam.border_bottom = std::min(
         std::max(cam.border_bottom, v->second.pad_bottom) + kVirtualMargin, h);
-      cam.border_left = std::min(cam.border_left + kVirtualMargin, w);
-      cam.border_right = std::min(cam.border_right + kVirtualMargin, w);
+      cam.border_left = std::min(
+        std::max(cam.border_left, v->second.pad_left) + kVirtualMargin, w);
+      cam.border_right = std::min(
+        std::max(cam.border_right, v->second.pad_right) + kVirtualMargin, w);
     }
 
     // Compensated images have empty (black) borders: keep features away from them.
@@ -759,8 +770,8 @@ cuvslam::Odometry::Config VisualSlamNode::VisualSlamImpl::CreateOdometryConfigur
   if (node.tracking_mode_ == static_cast<int>(TrackingMode::MULTISENSOR)) {
     // Multisensor mode: IMU fusion when the rig has an IMU, depth for the listed cameras.
     std::vector<int32_t> depth_ids;
-    if (node.depth_camera_id_ >= 0) {
-      depth_ids.push_back(node.depth_camera_id_);
+    for (size_t k = 0; k < node.NumDepths(); ++k) {
+      depth_ids.push_back(node.DepthCamera(k));
     }
     compat::SetMultisensorMode(
       configuration, depth_ids, node.depth_scale_factor_, node.depth_enable_stereo_tracking_);
@@ -1065,8 +1076,10 @@ void VisualSlamNode::VisualSlamImpl::OnRigFrame(const DeviceSync::RigFrame & fra
       const auto dR_imu = device_gyro[d].Integrate(
         frame.device_stamps_ns[d], frame.reference_stamp_ns);
       if (dR_imu) {
-        const Eigen::Matrix3d dR = CameraRotation(camera_R_imu[camera], *dR_imu);
-        H = RotationHomography(camera_K[camera], dR);
+        // A depth image is warped like the image of its camera.
+        const int rig_camera = node.CameraOfStream(camera);
+        const Eigen::Matrix3d dR = CameraRotation(camera_R_imu[rig_camera], *dR_imu);
+        H = RotationHomography(camera_K[rig_camera], dR);
         sync_stats.rotations_deg.push_back(RotationAngleDeg(dR));
         ++sync_stats.compensated_images;
       } else {
@@ -1106,17 +1119,19 @@ void VisualSlamNode::VisualSlamImpl::CallbackSynchronizedImages(
 
 ImageType VisualSlamNode::VisualSlamImpl::ToVirtual(int camera, const ImageType & image)
 {
-  const auto v = virtual_cameras.find(camera);
+  // A depth image goes through the virtual camera of the camera it is aligned with.
+  const auto v = virtual_cameras.find(node.CameraOfStream(camera));
   if (v == virtual_cameras.end()) {
     return image;
   }
-  if (auto out = ApplyVirtualCamera(v->second, *image)) {
+  if (auto out = ApplyVirtualCamera(v->second, *image, node.DepthOfStream(camera) >= 0)) {
     return out;
   }
   RCLCPP_ERROR_THROTTLE(
     node.get_logger(), *node.get_clock(), 5000,
-    "Camera %d: image %ux%u %s does not match the virtual camera (calibration %ux%u)", camera,
-    image->width, image->height, image->encoding.c_str(), v->second.width,
+    "Input %d: image %ux%u %s does not match the virtual camera (calibration %ux%u)", camera,
+    image->width, image->height, image->encoding.c_str(),
+    v->second.width - v->second.pad_left - v->second.pad_right,
     v->second.height - v->second.pad_top - v->second.pad_bottom);
   return image;
 }
@@ -1203,8 +1218,8 @@ void VisualSlamNode::VisualSlamImpl::UpdatePose(
     };
 #endif
 
-  // Calculate the depth image index
-  const int depth_image_idx = node.num_cameras_ + node.num_input_masks_;
+  // Index of the first depth image (after the cameras and the masks)
+  const int depth_image_idx = node.DepthStreamIndex(0);
 
   // First, extract the masks from the synchronized messages
   std::unordered_map<int, const ImageType *> mask_msgs;
@@ -1225,13 +1240,12 @@ void VisualSlamNode::VisualSlamImpl::UpdatePose(
         cuvslam_masks.push_back(
           TocuVSLAMImage(idx, *mask_msg, acquire_pixels(*mask_msg), latest_ts));
       }
-    } else if (node.UsesDepth() &&  // NOLINT
-      idx == depth_image_idx)
-    {
-      // This is the depth image for RGBD mode
+    } else if (const int k = node.DepthOfStream(idx); k >= 0) {
+      // Depth image (RGBD mode, or one of the depth cameras in Multisensor mode)
       cuvslam_depth_images.push_back(
         TocuVSLAMDepthImage(
-          node.depth_camera_id_, *image_msg, acquire_pixels(*image_msg), latest_ts));
+          node.DepthCamera(static_cast<size_t>(k)), *image_msg, acquire_pixels(*image_msg),
+          latest_ts));
     }
   }
 
@@ -1904,11 +1918,9 @@ void VisualSlamNode::VisualSlamImpl::ReportFrame(
   // Statistics of the input images.
   std::vector<std::pair<int, ImageStats>> stats;
   if (details) {
-    const int depth_index = node.num_cameras_ + node.num_input_masks_;
     for (const auto & [idx, msg] : images) {
       const bool is_camera = idx < static_cast<int>(node.num_cameras_);
-      const bool is_depth = node.UsesDepth() &&
-        idx == depth_index;
+      const bool is_depth = node.DepthOfStream(idx) >= 0;
       if (is_camera || is_depth) {
         stats.emplace_back(idx, ComputeImageStats(*msg, is_depth, node.diagnostics_pixel_stride_));
       }

@@ -1,0 +1,80 @@
+# One SLAM with both D455 (cam2 forward, cam1 down), cuVSLAM Multisensor mode (cuVSLAM >= 17
+# with cuNLS, experimental). Accepted without depth because each IR1/IR2 pair
+# overlaps (cuVSLAM needs a depth camera or one overlapping pair). Multicamera mode cannot use
+# the IMU, Inertial mode supports one stereo pair only: Multisensor is the mode for 4 IR + IMU.
+name: cam1_cam2_ir_imu
+description: cam2 and cam1 infrared stereo pairs with the cam2 IMU, one multisensor odometry
+mode: multisensor
+base_frame: cam2_link
+
+cameras:
+  - name: cam2_ir1
+    device: cam2
+    image_topic: /cam2/infra1/image_rect_raw
+    camera_info_topic: /cam2/infra1/camera_info
+    optical_frame: cam2_infra1_optical_frame
+  - name: cam2_ir2
+    device: cam2
+    image_topic: /cam2/infra2/image_rect_raw
+    camera_info_topic: /cam2/infra2/camera_info
+    optical_frame: cam2_infra2_optical_frame
+  - name: cam1_ir1
+    device: cam1
+    image_topic: /cam1/infra1/image_rect_raw
+    camera_info_topic: /cam1/infra1/camera_info
+    optical_frame: cam1_infra1_optical_frame
+  - name: cam1_ir2
+    device: cam1
+    image_topic: /cam1/infra2/image_rect_raw
+    camera_info_topic: /cam1/infra2/camera_info
+    optical_frame: cam1_infra2_optical_frame
+
+imu:
+  topic: /cam2/imu
+  frame: cam2_gyro_optical_frame
+  noise:
+    gyro_noise_density: 0.000244
+    gyro_random_walk: 0.000019393
+    accel_noise_density: 0.001862
+    accel_random_walk: 0.003
+    frequency: 200.0
+    source: default
+    date: null
+
+# Same extrinsics and software sync as cam1_cam2_ir.
+extrinsics:
+  - parent: cam2_link
+    child: cam1_link
+    translation: [-0.0134, 0.0, -0.0634]   # m
+    rotation_rpy: [0.0, 0.8604, 0.0]       # rad (pitch +49.3 deg)
+    source: >-
+      translation from the holder CAD (D455_HOLDER.stp); pitch estimated from the two
+      gyroscopes on the 17 bags
+    date: null
+
+# The images of one D455 (IR1, IR2, RGB, depth) share the capture time; the two D455 are paired
+# by the software sync (nearest frame, rotation compensation with the cam1 gyroscope, also for
+# the cam1 depth).
+sync:
+  mode: software
+  max_offset_ms: 34.0
+  rotation_compensation: true
+  compensation_border_px: 16
+  devices:
+    - name: cam2
+      imu_topic: /cam2/imu
+      imu_frame: cam2_gyro_optical_frame
+      clock_offset_ms: 0.0
+    - name: cam1
+      imu_topic: /cam1/imu
+      imu_frame: cam1_gyro_optical_frame
+      clock_offset_ms: 0.0
+
+hardware:
+  ir_emitter: false
+
+parameters:
+  rectified_images: true
+  enable_image_denoising: false
+  image_jitter_threshold_ms: 150.0
+  enable_localization_n_mapping: true

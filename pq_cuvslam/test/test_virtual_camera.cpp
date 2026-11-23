@@ -70,6 +70,45 @@ TEST(VirtualCamera, PadKeepsPixelsAndMovesPrincipalPoint)
   EXPECT_EQ(out->data[(20 + 7) * 64 + 10], image.data[7 * 64 + 10]);   // same pixel, shifted
 }
 
+TEST(VirtualCamera, SideBandsWidenTheImage)
+{
+  // 64x48 camera widened to 80x48 (e.g. a 640x480 RGB next to 848x480 IR images).
+  const auto v = MakeVirtualCamera(MakeInfo(false), false, 0, 0, 6, 10);
+  EXPECT_EQ(v.width, 80u);
+  EXPECT_EQ(v.height, 48u);
+  EXPECT_EQ(v.info->width, 80u);
+  EXPECT_DOUBLE_EQ(v.info->k[2], 38.0);
+  EXPECT_DOUBLE_EQ(v.info->k[5], 24.0);
+  const auto out = ApplyVirtualCamera(v, MakeImage());
+  ASSERT_NE(out, nullptr);
+  EXPECT_EQ(out->width, 80u);
+  EXPECT_EQ(out->data[10 * 80 + 2], 0);                       // left band
+  EXPECT_EQ(out->data[10 * 80 + 75], 0);                      // right band
+  EXPECT_EQ(out->data[10 * 80 + 6 + 5], 5 * 3 + 10);          // pixel (5, 10) moved right by 6
+}
+
+TEST(VirtualCamera, NearestKeepsDepthValues)
+{
+  // Depth step between two columns: nearest sampling keeps only the two values.
+  sensor_msgs::msg::Image depth;
+  depth.width = 64;
+  depth.height = 48;
+  depth.encoding = "16UC1";
+  depth.step = 128;
+  depth.data.resize(128 * 48);
+  auto * d = reinterpret_cast<uint16_t *>(depth.data.data());
+  for (uint32_t i = 0; i < 64 * 48; ++i) {
+    d[i] = (i % 64) < 32 ? 1000 : 3000;
+  }
+  const auto v = MakeVirtualCamera(MakeInfo(true), true, 0);
+  const auto out = ApplyVirtualCamera(v, depth, true);
+  ASSERT_NE(out, nullptr);
+  const auto * o = reinterpret_cast<const uint16_t *>(out->data.data());
+  for (uint32_t i = 0; i < out->width * out->height; ++i) {
+    EXPECT_TRUE(o[i] == 0 || o[i] == 1000 || o[i] == 3000) << i << ": " << o[i];
+  }
+}
+
 TEST(VirtualCamera, UndistortGivesPinhole)
 {
   const auto v = MakeVirtualCamera(MakeInfo(true), true, 0);

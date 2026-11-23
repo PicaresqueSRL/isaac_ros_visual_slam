@@ -141,6 +141,14 @@ void VisualSlamNode::DeclareAndReadParameters()
     Param<double>("calibration_frequency", 200.0)};
   depth_scale_factor_ = Param<double>("depth_scale_factor", 1000.0);
   depth_camera_id_ = Param<int>("depth_camera_id", 0);
+  for (const int64_t id :
+    Param<std::vector<int64_t>>("depth_camera_ids", std::vector<int64_t>{}))
+  {
+    depth_camera_ids_.push_back(static_cast<int32_t>(id));
+  }
+  if (depth_camera_ids_.empty() && depth_camera_id_ >= 0) {
+    depth_camera_ids_.push_back(depth_camera_id_);
+  }
   depth_enable_stereo_tracking_ = Param<bool>("depth_enable_stereo_tracking", false);
   image_jitter_threshold_ms_ = Param<double>("image_jitter_threshold_ms", 34.0);
   imu_jitter_threshold_ms_ = Param<double>("imu_jitter_threshold_ms", 10.0);
@@ -263,10 +271,17 @@ void VisualSlamNode::CheckSetup()
               "cuVSLAM " + std::to_string(features.major) + ", cuNLS " +
               (features.cunls ? "on" : "off"));
     }
-    if (depth_camera_id_ < 0 && num_cameras_ < 2) {
+    if (depth_camera_ids_.empty() && num_cameras_ < 2) {
       throw std::invalid_argument(
-              "tracking_mode 4 (Multisensor) needs a depth image (depth_camera_id >= 0) or at "
+              "tracking_mode 4 (Multisensor) needs a depth image (depth_camera_ids) or at "
               "least two cameras with overlapping views");
+    }
+    for (const int32_t id : depth_camera_ids_) {
+      if (id < 0 || id >= static_cast<int32_t>(num_cameras_)) {
+        throw std::invalid_argument(
+                "depth_camera_ids: camera " + std::to_string(id) + " out of range (num_cameras " +
+                std::to_string(num_cameras_) + ")");
+      }
     }
   }
   RCLCPP_INFO(get_logger(), "Tracking mode: %s", TrackingModeToString(tracking_mode_));
@@ -314,8 +329,10 @@ void VisualSlamNode::CreateInterfaces()
       return profile_ ? profile_->cameras.at(i).camera_info_topic :
              "visual_slam/camera_info_" + std::to_string(i);
     };
-  const std::string depth_topic = profile_ && profile_->depth ? profile_->depth->topic :
-    "visual_slam/depth_0";
+  const auto depth_topic = [this](size_t k) {
+      return profile_ && k < profile_->depths.size() ? profile_->depths[k].topic :
+             "visual_slam/depth_" + std::to_string(k);
+    };
   const std::string imu_topic = profile_ && profile_->imu ? profile_->imu->topic :
     "visual_slam/imu";
 
@@ -341,11 +358,11 @@ void VisualSlamNode::CreateInterfaces()
   }
 
   depth_image_subs_.clear();
-  if (UsesDepth()) {
-    const uint cb_index = num_cameras_ + num_input_masks_;
+  for (size_t k = 0; k < NumDepths(); ++k) {
+    const int cb_index = DepthStreamIndex(k);
     depth_image_subs_.push_back(
       create_subscription<sensor_msgs::msg::Image>(
-        depth_topic, image_qos_,
+        depth_topic(k), image_qos_,
         [this, cb_index](const ImageType & msg) {return CallbackImage(cb_index, msg);},
         image_sub_options));
   }
@@ -607,7 +624,8 @@ void VisualSlamNode::ApplyProfile()
   RCLCPP_INFO(
     get_logger(), "Profile %s (%s): mode %s, %zu cameras%s%s, %zu extrinsics", profile.name.c_str(),
     path.c_str(), profile.mode_name.c_str(), profile.cameras.size(), profile.imu ? ", IMU" : "",
-    profile.depth ? ", depth" : "", profile.extrinsics.size());
+    profile.depths.empty() ? "" : (", " + std::to_string(profile.depths.size()) + " depth").c_str(),
+    profile.extrinsics.size());
   for (const auto & t : profile.extrinsics) {
     RCLCPP_INFO(
       get_logger(), "  extrinsic %s -> %s: %s%s", t.parent.c_str(), t.child.c_str(),
@@ -723,8 +741,8 @@ std::vector<std::pair<int, std::string>> VisualSlamNode::GetImageTopics() const
     topics.emplace_back(
       static_cast<int>(num_cameras_ + i), segmentation_masks_subs_[i]->get_topic_name());
   }
-  for (const auto & sub : depth_image_subs_) {
-    topics.emplace_back(static_cast<int>(num_cameras_ + num_input_masks_), sub->get_topic_name());
+  for (size_t k = 0; k < depth_image_subs_.size(); ++k) {
+    topics.emplace_back(DepthStreamIndex(k), depth_image_subs_[k]->get_topic_name());
   }
   return topics;
 }

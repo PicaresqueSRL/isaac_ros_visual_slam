@@ -229,8 +229,8 @@ private:
   // MULTISENSOR (4).
   int tracking_mode_;
 
-  // Multisensor mode: fuse the IMU (imu_frame, noise parameters, IMU topic). The depth is used
-  // when depth_camera_id >= 0.
+  // Multisensor mode: fuse the IMU (imu_frame, noise parameters, IMU topic). Depth images for
+  // the cameras in depth_camera_ids (or depth_camera_id when the list is empty, if >= 0).
   bool multisensor_use_imu_;
 
   // The mode uses the IMU (VIO, Multisensor with IMU) / a depth image (RGBD, Multisensor with
@@ -240,10 +240,41 @@ private:
     return tracking_mode_ == static_cast<int>(TrackingMode::VIO) ||
            (tracking_mode_ == static_cast<int>(TrackingMode::MULTISENSOR) && multisensor_use_imu_);
   }
-  bool UsesDepth() const
+  bool UsesDepth() const {return NumDepths() > 0;}
+
+  // Depth images of the mode: one in RGBD mode (depth_camera_id), one per depth camera in
+  // Multisensor mode. Depth stream k has the input index num_cameras + num_masks + k (after the
+  // cameras and the masks) and is aligned with the rig camera DepthCamera(k).
+  size_t NumDepths() const
   {
-    return tracking_mode_ == static_cast<int>(TrackingMode::RGBD) ||
-           (tracking_mode_ == static_cast<int>(TrackingMode::MULTISENSOR) && depth_camera_id_ >= 0);
+    if (tracking_mode_ == static_cast<int>(TrackingMode::RGBD)) {
+      return 1;
+    }
+    if (tracking_mode_ == static_cast<int>(TrackingMode::MULTISENSOR)) {
+      return depth_camera_ids_.size();
+    }
+    return 0;
+  }
+  int32_t DepthCamera(size_t k) const
+  {
+    return tracking_mode_ == static_cast<int>(TrackingMode::RGBD) ? depth_camera_id_ :
+           depth_camera_ids_.at(k);
+  }
+  int DepthStreamIndex(size_t k) const
+  {
+    return static_cast<int>(num_cameras_ + num_input_masks_ + k);
+  }
+  // Depth number of an input index, -1 for cameras and masks.
+  int DepthOfStream(int index) const
+  {
+    const int k = index - DepthStreamIndex(0);
+    return k >= 0 && k < static_cast<int>(NumDepths()) ? k : -1;
+  }
+  // Rig camera of an input index: the camera itself, or the camera a depth is aligned with.
+  int CameraOfStream(int index) const
+  {
+    const int k = DepthOfStream(index);
+    return k >= 0 ? DepthCamera(static_cast<size_t>(k)) : index;
   }
 
   // Enable IMU debug mode
@@ -255,8 +286,12 @@ private:
   // Depth scale factor to convert raw depth values to meters
   float depth_scale_factor_;
 
-  // Camera index that the depth image is aligned with
+  // Camera index that the depth image is aligned with (RGBD mode, single depth)
   int32_t depth_camera_id_;
+
+  // Multisensor mode: camera indices that have a depth image (depth_camera_ids parameter;
+  // {depth_camera_id} when the parameter is empty and depth_camera_id >= 0)
+  std::vector<int32_t> depth_camera_ids_;
 
   // Enable stereo tracking between depth-aligned camera and other cameras
   bool depth_enable_stereo_tracking_;

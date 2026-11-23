@@ -59,10 +59,16 @@ struct ProfileCamera
   std::string camera_info_topic;
   std::string optical_frame;
   // Virtual camera given to cuVSLAM (impl/virtual_camera.hpp): undistorted to pinhole, and
-  // extended by pad_top / pad_bottom pixels (needs undistort for a distorted camera).
+  // extended by empty bands of pad_* pixels (needs undistort for a distorted camera).
   bool undistort = false;
   int pad_top = 0;
   int pad_bottom = 0;
+  int pad_left = 0;
+  int pad_right = 0;
+  bool HasVirtualCamera() const
+  {
+    return undistort || pad_top > 0 || pad_bottom > 0 || pad_left > 0 || pad_right > 0;
+  }
 };
 
 struct ProfileImu
@@ -78,6 +84,8 @@ struct ProfileImu
   std::string noise_date;
 };
 
+// Depth image aligned pixel by pixel with one camera of the profile (e.g. the D455 depth with
+// IR1, or the aligned_depth_to_color topic with the RGB camera).
 struct ProfileDepth
 {
   std::string topic;
@@ -132,7 +140,9 @@ struct Profile
   std::string base_frame;
   std::vector<ProfileCamera> cameras;
   std::optional<ProfileImu> imu;
-  std::optional<ProfileDepth> depth;
+  // Section "depth": one depth (a map) or several (a list, Multisensor mode). cuVSLAM applies
+  // one scale and one stereo tracking setting to all of them.
+  std::vector<ProfileDepth> depths;
   std::vector<ProfileTransform> extrinsics;
   std::optional<ProfileSync> sync;
   std::optional<bool> ir_emitter;  // D455 IR projector state during the recording

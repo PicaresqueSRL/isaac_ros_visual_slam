@@ -31,7 +31,8 @@ namespace visual_slam
 {
 
 VirtualCamera MakeVirtualCamera(
-  const sensor_msgs::msg::CameraInfo & info, bool undistort, int pad_top, int pad_bottom)
+  const sensor_msgs::msg::CameraInfo & info, bool undistort, int pad_top, int pad_bottom,
+  int pad_left, int pad_right)
 {
   namespace dm = sensor_msgs::distortion_models;
   if (info.width == 0 || info.height == 0) {
@@ -39,9 +40,12 @@ VirtualCamera MakeVirtualCamera(
   }
   pad_top = std::max(0, pad_top);
   pad_bottom = std::max(0, pad_bottom);
+  pad_left = std::max(0, pad_left);
+  pad_right = std::max(0, pad_right);
+  const bool bands = pad_top > 0 || pad_bottom > 0 || pad_left > 0 || pad_right > 0;
   const bool distorted = std::any_of(
     info.d.begin(), info.d.end(), [](double v) {return v != 0.0;});
-  if (distorted && !undistort && (pad_top > 0 || pad_bottom > 0)) {
+  if (distorted && !undistort && bands) {
     throw std::invalid_argument(
             "virtual camera: the bands need undistort (the distortion model cannot be extended "
             "beyond the image)");
@@ -57,12 +61,15 @@ VirtualCamera MakeVirtualCamera(
   VirtualCamera v;
   v.pad_top = pad_top;
   v.pad_bottom = pad_bottom;
-  v.width = info.width;
+  v.pad_left = pad_left;
+  v.pad_right = pad_right;
+  v.width = info.width + static_cast<uint32_t>(pad_left + pad_right);
   v.height = info.height + static_cast<uint32_t>(pad_top + pad_bottom);
 
   const cv::Matx33d K(info.k[0], info.k[1], info.k[2], info.k[3], info.k[4], info.k[5],
     info.k[6], info.k[7], info.k[8]);
   cv::Matx33d K_virtual = K;
+  K_virtual(0, 2) += pad_left;
   K_virtual(1, 2) += pad_top;
   std::vector<double> D(info.d.begin(), info.d.end());
   if (!undistort || !distorted) {
@@ -73,6 +80,7 @@ VirtualCamera MakeVirtualCamera(
     cv::Size(static_cast<int>(v.width), static_cast<int>(v.height)), CV_16SC2, v.map1, v.map2);
 
   auto out = std::make_shared<sensor_msgs::msg::CameraInfo>(info);
+  out->width = v.width;
   out->height = v.height;
   out->distortion_model = dm::PLUMB_BOB;
   out->d.assign(5, 0.0);   // all zeros: pinhole for cuVSLAM
@@ -89,7 +97,7 @@ VirtualCamera MakeVirtualCamera(
 }
 
 std::shared_ptr<sensor_msgs::msg::Image> ApplyVirtualCamera(
-  const VirtualCamera & camera, const sensor_msgs::msg::Image & image)
+  const VirtualCamera & camera, const sensor_msgs::msg::Image & image, bool nearest)
 {
   namespace enc = sensor_msgs::image_encodings;
   int type = -1;
@@ -100,7 +108,8 @@ std::shared_ptr<sensor_msgs::msg::Image> ApplyVirtualCamera(
   } else if (image.encoding == enc::RGB8 || image.encoding == enc::BGR8) {
     type = CV_8UC3;
   }
-  if (type < 0 || image.width != camera.width ||
+  if (type < 0 ||
+    image.width + static_cast<uint32_t>(camera.pad_left + camera.pad_right) != camera.width ||
     image.height + static_cast<uint32_t>(camera.pad_top + camera.pad_bottom) != camera.height ||
     image.data.size() < static_cast<size_t>(image.step) * image.height)
   {
@@ -120,7 +129,9 @@ std::shared_ptr<sensor_msgs::msg::Image> ApplyVirtualCamera(
   cv::Mat dst(
     static_cast<int>(out->height), static_cast<int>(out->width), type, out->data.data(),
     out->step);
-  cv::remap(src, dst, camera.map1, camera.map2, cv::INTER_LINEAR, cv::BORDER_CONSTANT, 0);
+  cv::remap(
+    src, dst, camera.map1, camera.map2, nearest ? cv::INTER_NEAREST : cv::INTER_LINEAR,
+    cv::BORDER_CONSTANT, 0);
   return out;
 }
 

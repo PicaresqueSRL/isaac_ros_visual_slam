@@ -14,9 +14,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 """
-Two VIO trackers in parallel (cam1 and cam2 stereo IR + IMU, one pq_cuvslam node each) and the
-odometry selector, which publishes the odometry of the healthy one in the cam2 base frame
-(visual_slam/tracking/odometry_fused).
+Two VIO trackers in parallel and the odometry selector.
+
+cam1 and cam2 stereo IR + IMU, one pq_cuvslam node each; the selector publishes the odometry of
+the healthy one in the cam2 base frame (visual_slam/tracking/odometry_fused).
 
 Live:    ros2 launch pq_cuvslam dual_vio.launch.py
 Bag:     ros2 launch pq_cuvslam dual_vio.launch.py bag:=<bag> [rate:=1.0]   (real-time play)

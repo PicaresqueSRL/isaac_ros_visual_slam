@@ -25,6 +25,14 @@ remapping is needed. To change profile at runtime: `deactivate`, `cleanup`, set 
 | `cam2_rgb_mono` | mono | cam2 RGB | 15-17; trajectory without metric scale |
 | `cam2_rgbd_imu` | multisensor | cam2 RGB + aligned depth + IMU | 17 with cuNLS; experimental in cuVSLAM |
 | `cam1_cam2_rgb_imu` | multisensor | cam2 RGB + cam1 RGB + cam2 IMU, no IR, no depth | 17 with cuNLS; experimental in cuVSLAM |
+| `cam1_cam2_ir_imu` | multisensor | cam2 + cam1 IR stereo, cam2 IMU: one SLAM | 17 with cuNLS; experimental in cuVSLAM |
+| `cam1_cam2_rgbd` | multisensor | cam2 + cam1 RGB with aligned depth: one SLAM | 17 with cuNLS; experimental in cuVSLAM |
+| `cam1_cam2_rgbd_imu` | multisensor | cam2 + cam1 RGB with aligned depth, cam2 IMU: one SLAM | 17 with cuNLS; experimental in cuVSLAM |
+| `cam1_cam2_ir_rgb_depth_imu` | multisensor | cam2 + cam1 IR stereo, RGB and depth (on IR1), cam2 IMU: one SLAM | 17 with cuNLS; experimental in cuVSLAM |
+
+The `aligned_depth_to_color` topics come from the RealSense driver with
+`align_depth.enable:=true`; for bags recorded without it, `tools/align_depth.py` computes them
+from the depth and the factory calibration in the bag.
 
 ## Format
 
@@ -58,12 +66,19 @@ depth:                                # required for rgbd; multisensor: depth or
   camera_index: 0                     # camera the depth is aligned to
   scale: 1000.0                       # raw depth units per meter (D455: millimeters)
   stereo_tracking: false
+# multisensor: a list of depth images, one per camera (same scale and stereo_tracking):
+# depth:
+#   - {topic: /cam2/depth/image_rect_raw, camera_index: 0, scale: 1000.0}
+#   - {topic: /cam1/depth/image_rect_raw, camera_index: 3, scale: 1000.0}
 
 # Per camera, optional: virtual camera given to cuVSLAM (impl/virtual_camera.hpp).
 #   undistort: true                     undistorted to pinhole (cuNLS / Multisensor: pinhole only)
 #   pad_top: 200                        empty band on top (principal point moved down) or at the
 #   pad_bottom: 200                     bottom: a wider declared view for the 50 % frustum
 #                                       overlap check (all cameras must have the same size)
+#   pad_left: 104                       empty bands on the sides: e.g. a 640x480 RGB widened to
+#   pad_right: 104                      848x480, the size of the IR images
+# A depth image goes through the virtual camera of its camera (nearest-neighbour sampling).
 
 extrinsics:                           # transforms missing from the TF of the data
   - parent: cam2_link
@@ -74,7 +89,7 @@ extrinsics:                           # transforms missing from the TF of the da
     source: CAD + gyroscope estimate           # required
     date: null
 
-sync:                                 # between devices (multicamera mode); optional
+sync:                                 # between devices (multicamera, multisensor); optional
   mode: software                      # none | software | hardware
   max_offset_ms: 34.0                 # max capture time difference of paired frames
                                       # (default 34 for software, 2 for hardware)
@@ -97,7 +112,8 @@ parameters:                           # any other node parameter, applied last
 The profile sets these node parameters: `tracking_mode` (from `mode`), `base_frame`,
 `num_cameras` and `min_num_images` (number of cameras), `camera_optical_frames`; with `imu`:
 `imu_frame`, the noise parameters and `calibration_frequency`; with `depth`:
-`depth_camera_id`, `depth_scale_factor`, `depth_enable_stereo_tracking`; then everything in
+`depth_camera_id` (multisensor: also `depth_camera_ids`), `depth_scale_factor`,
+`depth_enable_stereo_tracking`; then everything in
 `parameters` (an unknown parameter name is an error).
 
 ## Synchronization between devices
