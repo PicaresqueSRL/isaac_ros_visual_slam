@@ -417,6 +417,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(c.ros.frames(topics, have))
             if url.path == '/api/state':
                 return self.send_json(c.state())
+            if url.path == '/api/graph':
+                return self.send_json(c.ros.connections())
             if url.path == '/api/topics':
                 return self.send_json(c.ros.topics_state())
             if url.path == '/api/slam':

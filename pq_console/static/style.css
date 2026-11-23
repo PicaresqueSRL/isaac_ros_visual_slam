@@ -118,3 +118,4 @@ summary.card-title { font-weight: 600; font-size: 14px; color: var(--text); marg
 .rig-edit input { width: 100%; }
 .small-text { font-size: 12px; }
 label.file input { font-size: 12px; max-width: 200px; }
+#graph { height: 62vh; min-height: 360px; border-radius: 6px; background: var(--bg); margin-top: 8px; }

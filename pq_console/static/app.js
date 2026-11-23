@@ -30,6 +30,9 @@ function showError(msg) {
   $('error').classList.toggle('hidden', !msg);
 }
 $('error').onclick = () => showError('');
+// Errors of the page itself in the banner (instead of only the browser console).
+window.addEventListener('error', (e) => showError('page error: ' + e.message));
+window.addEventListener('unhandledrejection', (e) => showError('page error: ' + (e.reason && e.reason.message || e.reason)));
 
 async function get(path) {
   const r = await fetch(path, { cache: 'no-store' });
@@ -661,7 +664,7 @@ async function refreshTopics() {
   try { topics = await get('/api/topics'); } catch (e) { return; }
   renderLivePreviews();
   if (tab !== 'graph') return;
-  $('nodes').innerHTML = topics.nodes.map((n) => `<li>${esc(n)}</li>`).join('');
+  refreshGraph();
   const f = $('topic-filter').value.trim().toLowerCase();
   $('topics').querySelector('tbody').innerHTML = topics.topics
     .filter((t) => !f || t.name.toLowerCase().includes(f) || t.type.toLowerCase().includes(f))
@@ -674,6 +677,83 @@ async function refreshTopics() {
     post('measure', { topic: b.dataset.measure }).then(refreshTopics));
 }
 $('topic-filter').oninput = refreshTopics;
+
+// ---- graph: publisher node -> topic -> subscriber node (cytoscape + dagre layout) ----
+let cy = null;
+let graphKey = '';
+const HIDDEN_TOPICS = /^\/(rosout|parameter_events|clock)$|^\/events\/|\/(get_type_description|_action)\b|\/transition_event$/;
+// rosbag2_recorder subscribes to everything it records: hidden with the infrastructure.
+const HIDDEN_NODES = /^\/(pq_console|pq_console_latest|rosbag2_recorder|_ros2cli.*|transform_listener_impl_.*|launch_ros_.*)$/;
+function hasDagre() {
+  try { return !!cytoscape('layout', 'dagre'); } catch (e) { return false; }
+}
+async function refreshGraph() {
+  if (typeof cytoscape === 'undefined') { $('graph').textContent = 'graph library not loaded (no internet in the browser?)'; return; }
+  let g;
+  try { g = await get('/api/graph'); } catch (e) { return; }
+  const hide = $('graph-hide').checked;
+  const elements = [];
+  const topicSet = new Set();
+  for (const [node, c] of Object.entries(g)) {
+    if (hide && HIDDEN_NODES.test(node)) continue;
+    const pubs = c.pub.filter(([t]) => !(hide && HIDDEN_TOPICS.test(t)));
+    const subs = c.sub.filter(([t]) => !(hide && HIDDEN_TOPICS.test(t)));
+    if (hide && !pubs.length && !subs.length) continue;
+    elements.push({ data: { id: 'n:' + node, label: node, kind: 'node' } });
+    for (const [t, type] of pubs) { topicSet.add(t + '\t' + type); elements.push({ data: { id: `p:${node}>${t}`, source: 'n:' + node, target: 't:' + t } }); }
+    for (const [t, type] of subs) { topicSet.add(t + '\t' + type); elements.push({ data: { id: `s:${t}>${node}`, source: 't:' + t, target: 'n:' + node } }); }
+  }
+  const seen = new Set();
+  for (const x of topicSet) {
+    const [t, type] = x.split('\t');
+    if (seen.has(t)) continue;
+    seen.add(t);
+    elements.unshift({ data: { id: 't:' + t, label: t, kind: 'topic', type } });
+  }
+  const nNodes = elements.filter((e) => e.data.kind === 'node').length;
+  $('graph-info').textContent = `${nNodes} nodes, ${seen.size} topics` + (hasDagre() ? '' : ' (dagre layout not loaded)');
+  const key = JSON.stringify(elements.map((e) => e.data.id).sort());
+  if (key === graphKey && cy) { highlight(); return; }
+  graphKey = key;
+  const css = getComputedStyle(document.body);
+  const text = css.getPropertyValue('--text').trim(), muted = css.getPropertyValue('--muted').trim();
+  if (cy) cy.destroy();
+  cy = cytoscape({
+    container: $('graph'), elements, wheelSensitivity: 0.3,
+    style: [
+      { selector: 'node[kind="node"]', style: { shape: 'round-rectangle', 'background-color': '#2563eb', label: 'data(label)',
+        color: '#fff', 'text-valign': 'center', 'font-size': 11, width: 'label', height: 22, padding: 8 } },
+      { selector: 'node[kind="topic"]', style: { shape: 'rectangle', 'background-color': css.getPropertyValue('--chip').trim(),
+        'border-width': 1, 'border-color': muted, label: 'data(label)', color: text, 'text-valign': 'center',
+        'font-size': 10, width: 'label', height: 16, padding: 4 } },
+      { selector: 'edge', style: { width: 1.2, 'line-color': muted, 'target-arrow-color': muted, 'target-arrow-shape': 'triangle',
+        'curve-style': 'bezier', 'arrow-scale': 0.8 } },
+      { selector: '.faded', style: { opacity: 0.15 } },
+      { selector: '.hit', style: { 'border-width': 3, 'border-color': '#f59e0b' } },
+    ],
+    layout: hasDagre() ? { name: 'dagre', rankDir: 'LR', nodeSep: 8, rankSep: 60 } : { name: 'breadthfirst', directed: true },
+  });
+  cy.on('tap', 'node[kind="topic"]', (e) => {
+    const t = e.target.data('label');
+    $('topic-filter').value = t;
+    post('measure', { topic: t }).then(refreshTopics).catch(() => {});
+    $('topics').scrollIntoView({ behavior: 'smooth' });
+  });
+  highlight();
+}
+function highlight() {
+  if (!cy) return;
+  const f = $('graph-find').value.trim().toLowerCase();
+  cy.elements().removeClass('faded hit');
+  if (!f) return;
+  const hits = cy.nodes().filter((n) => n.data('label').toLowerCase().includes(f));
+  const keep = hits.union(hits.neighborhood());
+  cy.elements().not(keep).addClass('faded');
+  hits.addClass('hit');
+}
+$('graph-hide').onchange = () => { graphKey = ''; refreshGraph(); };
+$('graph-find').oninput = highlight;
+$('graph-fit').onclick = () => cy && cy.fit(undefined, 20);
 
 // ---- start ----
 (async () => {

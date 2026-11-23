@@ -53,7 +53,9 @@ containers mount them at the same path.
   overlap of the views at 2-4 m is computed for each pair, as cuVSLAM checks it. Rigs are
   saved in `data_dir/rigs/`; *Use for SLAM* makes a rig the source of the extrinsics of the
   profiles built from sensors on the Bags page.
-- **Graph**: ROS nodes and topics; rates on request.
+- **Graph**: ROS nodes and topics as a graph (publisher → topic → subscriber; cytoscape from a
+  CDN), infrastructure hidden by default, highlight by name; click a topic to measure its rate.
+  Topics table with rates on request.
 
 cuVSLAM builds: `cuvslam_versions` in the configuration maps a label to an image and/or an
 install folder; profiles and sensors that need the Multisensor mode are refused below 17.

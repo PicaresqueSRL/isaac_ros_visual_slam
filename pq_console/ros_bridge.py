@@ -391,6 +391,28 @@ class RosBridge(Node):
                 t.update(hz=previews[t['name']].rate(), kbps=None, age_s=None, measuring=True)
         return graph
 
+    def connections(self, max_age=2.0):
+        """Publishers and subscriptions of every node: {node: {'pub': [...], 'sub': [...]}}."""
+        cache = getattr(self, '_connections', None)
+        if cache and time.time() - cache[0] < max_age:
+            return cache[1]
+        out = {}
+        for name, ns in self.get_node_names_and_namespaces():
+            full = f'{ns.rstrip("/")}/{name}'
+            try:
+                pub = self.get_publisher_names_and_types_by_node(name, ns)
+                sub = self.get_subscriber_names_and_types_by_node(name, ns)
+            except Exception:   # noqa: B902 - node gone meanwhile
+                continue
+            keep = lambda items: sorted({(t, ty[0] if ty else '') for t, ty in items  # noqa: E731
+                                         if '/_buf/' not in t})
+            entry = out.setdefault(full, {'pub': set(), 'sub': set()})
+            entry['pub'].update(keep(pub))
+            entry['sub'].update(keep(sub))
+        out = {k: {'pub': sorted(v['pub']), 'sub': sorted(v['sub'])} for k, v in out.items()}
+        self._connections = (time.time(), out)
+        return out
+
     def topic_type(self, topic):
         with self.lock:
             for t in self.graph['topics']:
