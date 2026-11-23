@@ -11,7 +11,7 @@ const TABS = ['bags', 'cameras', 'rig', 'graph'];
 let tab = 'bags';
 let state = null;
 let topics = { nodes: [], topics: [] };
-let slam = { generation: null, paths: {}, since: {} };
+let slam = { generation: null, paths: {}, since: {}, landmarks: {} };
 let bag = null;           // content of the loaded bag (/api/bag)
 let lastJobState = null;
 
@@ -52,17 +52,36 @@ const fmtDate = (t) => t ? new Date(t * 1000).toLocaleString([], { dateStyle: 's
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const chip = (text, cls = '') => `<span class="chip ${cls}">${esc(text)}</span>`;
 
-// Image previews: each <img data-topic> asks for the latest frame (/snapshot) about every
-// 200 ms while it is in the page; short requests leave connections for the rest of the page.
-function previewLoop(img) {
-  if (img.dataset.loop) return;
-  img.dataset.loop = '1';
-  const next = () => {
-    if (!img.isConnected || !img.dataset.topic) { delete img.dataset.loop; return; }
-    img.src = q('/snapshot', { topic: img.dataset.topic, t: Date.now() });
-  };
-  img.onload = img.onerror = () => setTimeout(next, 200);
-  next();
+// Image previews: one request (/api/frames) for all the visible <img data-topic>, then the next
+// one 120 ms after the answer; only new frames are sent. The server takes the latest image of
+// each topic at that moment (it does not receive the streams continuously).
+const frameSeq = {};
+const frameInfo = {};
+async function framesLoop() {
+  const imgs = [...document.querySelectorAll('img[data-topic]')].filter((i) => i.dataset.topic && i.offsetParent !== null);
+  const wanted = [...new Set(imgs.map((i) => i.dataset.topic))];
+  if (wanted.length) {
+    try {
+      const r = await get(q('/api/frames', { topics: wanted.join(','), have: wanted.map((t) => frameSeq[t] || 0).join(',') }));
+      for (const [t, f] of Object.entries(r)) {
+        frameInfo[t] = f.info;
+        if (f.jpeg) {
+          frameSeq[t] = f.seq;
+          const src = 'data:image/jpeg;base64,' + f.jpeg;
+          imgs.filter((i) => i.dataset.topic === t).forEach((i) => { i.src = src; });
+        }
+      }
+    } catch (e) { /* console restarting */ }
+  }
+  // About 8 fps for a few previews, 5 fps for eight: the cost is per decoded image.
+  setTimeout(framesLoop, wanted.length ? Math.max(120, 25 * wanted.length) : 400);
+}
+function infoText(info) {
+  if (!info) return 'waiting…';
+  return [info.hz != null ? `${info.hz} fps` : '', info.width ? `${info.width}×${info.height}` : '',
+    info.saturated_pct != null ? `saturated ${info.saturated_pct}%` : '',
+    info.valid_depth_pct != null ? `valid depth ${info.valid_depth_pct}%` : '', info.error || '']
+    .filter(Boolean).join(' · ');
 }
 
 // ---- tabs ----
@@ -198,7 +217,6 @@ function renderBagPreviews() {
   const key = JSON.stringify([bag.path, show]);
   if (el.dataset.key !== key) {
     el.dataset.key = key;
-    setTimeout(() => el.querySelectorAll('img[data-topic]').forEach(previewLoop), 0);
     el.innerHTML = Object.entries(bag.cameras).filter(([, c]) => c.streams.length).map(([cam, c]) =>
       `<div class="cam-row"><h3>${esc(cam)}</h3><div class="tiles">${c.streams.map((s) =>
         `<div class="tile" data-topic="${esc(s.topic)}"><div class="label"><span>${esc(s.label)}</span>
@@ -206,13 +224,9 @@ function renderBagPreviews() {
          <div class="frame" ${s.width ? `style="aspect-ratio:${s.width}/${s.height}"` : ''}>${show ? `<img data-topic="${esc(s.topic)}" alt="">` : 'press Play'}</div>
          <div class="info"></div></div>`).join('')}</div></div>`).join('');
   }
-  if (!show || !state) return;
+  if (!show) return;
   el.querySelectorAll('.tile').forEach((t) => {
-    const info = (state.previews || {})[t.dataset.topic];
-    t.querySelector('.info').textContent = !info ? 'waiting…' : [`${info.hz} fps`,
-      info.saturated_pct != null ? `saturated ${info.saturated_pct}%` : '',
-      info.valid_depth_pct != null ? `valid depth ${info.valid_depth_pct}%` : '', info.error || '']
-      .filter(Boolean).join(' · ');
+    t.querySelector('.info').textContent = infoText(frameInfo[t.dataset.topic]);
   });
 }
 
@@ -248,7 +262,7 @@ function renderJob() {
   renderBagPreviews();
 }
 $('pb-play').onclick = () => post('view/start', { path: bag.path, rate: +$('pb-rate').value })
-  .then(() => { slam = { generation: null, paths: {}, since: {} }; refreshState(); });
+  .then(() => { slam = { generation: null, paths: {}, since: {}, landmarks: {} }; refreshState(); });
 $('pb-pause').onclick = () => post('player', { command: state.job.meta.paused ? 'resume' : 'pause' }).then(refreshState);
 $('pb-stop').onclick = () => post('job/stop').then(refreshState);
 $('pb-rate').onchange = () => {
@@ -335,7 +349,7 @@ $('slam-start').onclick = async () => {
   else if (!planOk) { showError('the chosen sensors do not make a valid configuration'); return; }
   else body.selection = selection();
   await post('replay/start', body);
-  slam = { generation: null, paths: {}, since: {} };
+  slam = { generation: null, paths: {}, since: {}, landmarks: {} };
   refreshState();
 };
 $('slam-stop').onclick = () => confirm('Stop the SLAM?') && post('job/stop').then(refreshState);
@@ -357,8 +371,10 @@ function renderRuns() {
 // ---- SLAM live view ----
 async function refreshSlam() {
   let s;
-  try { s = await get('/api/slam?since=' + encodeURIComponent(JSON.stringify(slam.since))); } catch (e) { return; }
-  if (s.generation !== slam.generation) slam = { generation: s.generation, paths: {}, since: {} };
+  const have = Object.fromEntries(Object.entries(slam.landmarks).map(([t, l]) => [t, l.number]));
+  try { s = await get(q('/api/slam', { since: JSON.stringify(slam.since), landmarks: JSON.stringify(have) })); } catch (e) { return; }
+  if (s.generation !== slam.generation) slam = { generation: s.generation, paths: {}, since: {}, landmarks: {} };
+  Object.assign(slam.landmarks, s.landmarks || {});
   for (const [topic, pts] of Object.entries(s.paths)) {
     const path = slam.paths[topic] || (slam.paths[topic] = []);
     path.push(...pts);
@@ -375,8 +391,9 @@ function drawTrajectory() {
   const W = cv.width, H = cv.height;
   ctx.clearRect(0, 0, W, H);
   const entries = Object.entries(slam.paths).filter(([, p]) => p.length);
+  const clouds = Object.entries(slam.landmarks).filter(([, l]) => l.xy.length);
   const css = getComputedStyle(document.body);
-  if (!entries.length) {
+  if (!entries.length && !clouds.length) {
     ctx.fillStyle = css.getPropertyValue('--muted');
     ctx.font = '14px system-ui';
     ctx.fillText('no trajectory yet', 20, 30);
@@ -384,10 +401,11 @@ function drawTrajectory() {
     return;
   }
   // Top view (x right, y up), same scale on both axes.
+  // Frame on the trajectories (landmarks can be far away); on the landmarks without trajectory.
   let minx = Infinity, maxx = -Infinity, miny = Infinity, maxy = -Infinity;
-  for (const [, p] of entries) for (const v of p) {
-    minx = Math.min(minx, v[1]); maxx = Math.max(maxx, v[1]); miny = Math.min(miny, v[2]); maxy = Math.max(maxy, v[2]);
-  }
+  const grow = (x, y) => { minx = Math.min(minx, x); maxx = Math.max(maxx, x); miny = Math.min(miny, y); maxy = Math.max(maxy, y); };
+  for (const [, p] of entries) for (const v of p) grow(v[1], v[2]);
+  if (!entries.length) for (const [, l] of clouds) for (let k = 0; k < l.xy.length; k += 2) grow(l.xy[k], l.xy[k + 1]);
   const span = Math.max(maxx - minx, maxy - miny, 2) * 1.1;
   const scale = Math.min(W, H) / span;
   const cx = (minx + maxx) / 2, cy = (miny + maxy) / 2;
@@ -402,6 +420,13 @@ function drawTrajectory() {
     ctx.beginPath(); ctx.moveTo(0, Y(g)); ctx.lineTo(W, Y(g)); ctx.stroke();
   }
   const legend = [];
+  // Landmarks (top view cells of 5 cm) under the trajectories.
+  const dot = Math.max(1.5, 0.05 * scale);
+  clouds.forEach(([topic, l], i) => {
+    ctx.fillStyle = i ? 'rgba(59,130,246,0.35)' : 'rgba(100,116,139,0.45)';
+    for (let k = 0; k < l.xy.length; k += 2) ctx.fillRect(X(l.xy[k]) - dot / 2, Y(l.xy[k + 1]) - dot / 2, dot, dot);
+    legend.push(`<span style="--c:${ctx.fillStyle}">${esc(topic.replace('/vis/landmarks_cloud', ''))} landmarks · ${l.xy.length / 2}</span>`);
+  });
   entries.forEach(([topic, p], i) => {
     const color = COLORS[i % COLORS.length];
     ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.beginPath();
@@ -518,14 +543,9 @@ function updateLivePreviews() {
     const topic = available ? want : '';
     if (img.dataset.topic !== topic) {
       img.dataset.topic = topic;
-      if (topic) previewLoop(img); else img.removeAttribute('src');
+      if (!topic) img.removeAttribute('src');
     }
-    const info = (state && state.previews && state.previews[want]) || null;
-    el.querySelector('.info').textContent = !want ? '' : !available ? 'topic not published' : !info ? 'waiting…'
-      : [`${info.hz} fps`, info.width ? `${info.width}×${info.height}` : '',
-        info.saturated_pct != null ? `saturated ${info.saturated_pct}%` : '',
-        info.valid_depth_pct != null ? `valid depth ${info.valid_depth_pct}%` : '',
-        info.error || ''].filter(Boolean).join(' · ');
+    el.querySelector('.info').textContent = !want ? '' : !available ? 'topic not published' : infoText(frameInfo[want]);
   });
 }
 
@@ -631,6 +651,8 @@ $('topic-filter').oninput = refreshTopics;
   if (lastBag) loadBag(lastBag);
   refreshTopics();
   setInterval(refreshState, 1000);
-  setInterval(() => { if (tab === 'bags') refreshSlam(); if (tab === 'cameras') updateLivePreviews(); }, 1000);
+  setInterval(() => { if (tab === 'cameras') updateLivePreviews(); }, 1000);
+  setInterval(() => { if (tab === 'bags') refreshSlam(); }, 250);
+  framesLoop();
   setInterval(refreshTopics, 2000);
 })();

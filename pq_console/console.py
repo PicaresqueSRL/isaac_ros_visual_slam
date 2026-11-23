@@ -101,7 +101,6 @@ class Console:
         s = self.sessions.state()
         s['cameras'] = [c.name for c in self.c.cameras]
         s['emitters'] = self.emitters() if s['cameras_running'] else {}
-        s['previews'] = self.ros.previews_state()
         s['diagnostics'] = self.ros.diagnostics_state()
         clock = self.ros.clock
         s['clock'] = clock[0] if clock and time.time() - clock[1] < 2 else None
@@ -339,14 +338,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_file(os.path.join(STATIC, 'index.html'))
             if url.path.startswith('/static/'):
                 return self.send_file(os.path.join(STATIC, os.path.basename(url.path)))
-            if url.path == '/snapshot':
-                return self.snapshot(q['topic'])
+            if url.path == '/api/frames':
+                topics = [t for t in q.get('topics', '').split(',') if t]
+                have = [int(x or 0) for x in q.get('have', '').split(',')] + [0] * len(topics)
+                return self.send_json(c.ros.frames(topics, have))
             if url.path == '/api/state':
                 return self.send_json(c.state())
             if url.path == '/api/topics':
                 return self.send_json(c.ros.topics_state())
             if url.path == '/api/slam':
-                return self.send_json(c.ros.slam.state(json.loads(q.get('since', '{}'))))
+                return self.send_json(c.ros.slam_state(json.loads(q.get('since', '{}')),
+                                                       json.loads(q.get('landmarks', '{}'))))
             if url.path == '/api/browse':
                 return self.send_json(bags_mod.browse(q.get('path', ''), c.c.roots))
             if url.path == '/api/bag':
@@ -393,26 +395,6 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Cache-Control', 'no-cache')
         self.end_headers()
         self.wfile.write(data)
-
-    def snapshot(self, topic):
-        """Latest preview JPEG of an image topic (the page asks for one every ~200 ms).
-
-        Short requests instead of MJPEG streams: browsers open at most 6 connections to a host,
-        and one long stream per image topic would block the other requests of the page.
-        """
-        jpeg = self.console.ros.preview(topic).latest()
-        if jpeg is None:
-            self.send_response(204)
-            self.send_header('Cache-Control', 'no-store')
-            self.send_header('Content-Length', '0')
-            self.end_headers()
-            return
-        self.send_response(200)
-        self.send_header('Content-Type', 'image/jpeg')
-        self.send_header('Content-Length', str(len(jpeg)))
-        self.send_header('Cache-Control', 'no-store')
-        self.end_headers()
-        self.wfile.write(jpeg)
 
 
 def main():

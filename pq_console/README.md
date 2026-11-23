@@ -49,12 +49,14 @@ install folder; profiles and sensors that need the Multisensor mode are refused 
 
 ## How it works
 
-- `console.py`: HTTP server (Python standard library): page, JSON API, JPEG previews
-  (latest frame on request: browsers open at most 6 connections to a host).
+- `console.py`: HTTP server (Python standard library): page, JSON API, JPEG previews (all the
+  visible ones in one request: browsers open at most 6 connections to a host).
 - `bags.py`: folder browsing, content of a bag, profiles for the chosen sensors.
-- `ros_bridge.py`: ROS node (graph, rates, previews, SLAM state, parameters of the camera
-  drivers). Light by design: rates only on request, previews decoded at 5 fps and dropped
-  10 s after the page stops showing them.
+- `ros_bridge.py`: ROS node (graph, rates, previews, SLAM state with landmarks, parameters of
+  the camera drivers). Light by design: image and landmark topics are not received
+  continuously; their latest sample is taken only when the page asks (history 1, node not spun
+  by an executor), images are subsampled to about 320 px and JPEG-compressed (~6 kB). Eight
+  previews at ~5 fps cost about 15 % of a PC core.
 - `sessions.py`: containers `pq_cams` (RealSense driver), `pq_rec` (recorder), `pq_slam`,
   `pq_slamrec` and `pq_play` (replay), started through the Docker socket with the docker client
   of the host.

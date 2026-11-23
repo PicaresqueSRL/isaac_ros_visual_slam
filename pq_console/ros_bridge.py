@@ -17,15 +17,19 @@
 ROS side of pq_console: graph, topic rates, image previews, SLAM state, camera parameters.
 
 Light by design, to run next to a recording on the Jetson:
-  - topic rates are measured only on request (and for the previewed images);
-  - previews subscribe to the serialized messages and decode at most preview_fps frames per
-    second, downscaled and JPEG-compressed; a preview without viewers is dropped after 10 s;
+  - previews and landmarks are not received continuously: their subscriptions (history 1) belong
+    to a node that no executor spins, and the latest sample is taken only when the page asks for
+    it (a few times per second), then decoded, downscaled and JPEG-compressed. The rate of the
+    stream comes from the publication sequence numbers. A preview without viewers is dropped
+    after 10 s;
+  - topic rates of other topics are measured only on request;
   - the SLAM state comes from the odometry and diagnostics topics of pq_cuvslam (small messages).
 """
 
 import collections
 import math
 import re
+import struct
 import threading
 import time
 
@@ -38,12 +42,12 @@ from rcl_interfaces.srv import DescribeParameters, GetParameters, ListParameters
 import rclpy
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import HistoryPolicy, qos_profile_sensor_data, QoSProfile, ReliabilityPolicy
 from rclpy.serialization import deserialize_message
 from rosbag2_interfaces.srv import Pause, Resume, Seek, SetRate
 from rosgraph_msgs.msg import Clock
 from rosidl_runtime_py.utilities import get_message
-from sensor_msgs.msg import CompressedImage, Image
+from sensor_msgs.msg import CompressedImage, Image, PointCloud2
 
 try:
     from pq_cuvslam_interfaces.msg import FrameDiagnostics, SlamEvent
@@ -51,6 +55,10 @@ except ImportError:   # console outside the pq_cuvslam image: no SLAM diagnostic
     FrameDiagnostics = SlamEvent = None
 
 ODOM_RE = re.compile(r'^(/cam[12]_vio)?/visual_slam/tracking/odometry(_guarded|_fused)?$')
+LANDMARKS_RE = re.compile(r'visual_slam/vis/landmarks_cloud$')
+LATEST_QOS = QoSProfile(depth=1, history=HistoryPolicy.KEEP_LAST,
+                        reliability=ReliabilityPolicy.BEST_EFFORT)
+LANDMARK_CELL_M = 0.05       # top view grid of the landmarks sent to the page
 EVENT_NAMES = {1: 'tracking lost', 2: 'tracking recovered', 3: 'loop closure', 4: 'configured',
                5: 'tracker initialized', 6: 'pose rejected', 7: 'pose accepted',
                8: 'tracker reset', 9: 'camera switch'}
@@ -105,35 +113,103 @@ class Meter:
                 'age_s': round(now - last, 1) if last else None}
 
 
-class Preview:
-    """Latest JPEG of an image topic, decoded at most fps times per second."""
+def parse_image(data):
+    """
+    sensor_msgs/Image from its serialized form (little-endian CDR), without copying the pixels.
 
-    def __init__(self, topic, compressed, fps, width):
-        self.topic, self.compressed = topic, compressed
-        self.period = 1.0 / fps
+    deserialize_message builds a Python array of the pixels and is several times slower.
+    Returns (height, width, encoding, step, memoryview of the pixels).
+    """
+    if data[1] != 1:
+        raise ValueError('not little-endian CDR')
+    buf = memoryview(data)
+    pos = 4
+
+    def u32():
+        nonlocal pos
+        pos += (-(pos - 4)) % 4          # alignment relative to the start of the payload
+        v = struct.unpack_from('<I', buf, pos)[0]
+        pos += 4
+        return v
+
+    def string():
+        nonlocal pos
+        n = u32()
+        v = bytes(buf[pos:pos + n - 1]).decode()
+        pos += n
+        return v
+
+    u32()                                # stamp.sec
+    u32()                                # stamp.nanosec
+    string()                             # frame_id
+    height, width = u32(), u32()
+    encoding = string()
+    pos += 1                             # is_bigendian
+    step = u32()
+    n = u32()
+    return height, width, encoding, step, buf[pos:pos + n]
+
+
+class Latest:
+    """Latest sample of a topic, taken on request (the node is not spun by an executor)."""
+
+    def __init__(self, node, node_lock, msg_type, topic):
+        self.node_lock = node_lock
+        with node_lock:
+            self.sub = node.create_subscription(msg_type, topic, lambda _: None, LATEST_QOS, raw=True)
+        self.last_seq = None
+        self.last_stamp = None
+        self.last_new = None     # wall time of the last new sample
+        self.hz = None
+
+    def take(self):
+        """Serialized latest sample, or None if nothing new arrived."""
+        with self.node_lock, self.sub.handle:
+            r = self.sub.handle.take_message(self.sub.msg_type, True)
+        if not r:
+            return None
+        data, info = r
+        seq, stamp = info.get('publication_sequence_number'), info.get('source_timestamp')
+        if seq and self.last_seq and stamp and self.last_stamp and seq > self.last_seq and \
+                stamp > self.last_stamp:
+            hz = (seq - self.last_seq) / ((stamp - self.last_stamp) / 1e9)
+            self.hz = hz if self.hz is None else 0.7 * self.hz + 0.3 * hz
+        self.last_seq, self.last_stamp, self.last_new = seq, stamp, time.time()
+        return data
+
+    def rate(self):
+        if self.last_new is None or time.time() - self.last_new > 3.0:
+            return 0.0 if self.last_new else None
+        return round(self.hz, 1) if self.hz else None
+
+
+class Preview:
+    """Latest JPEG of an image topic, decoded when the page asks for it."""
+
+    def __init__(self, latest, compressed, width):
+        self.latest, self.compressed = latest, compressed
         self.width = width
-        self.meter = Meter()
         self.jpeg = None
+        self.seq = 0
         self.info = {}
-        self.last_decode = 0.0
         self.last_viewer = time.time()
         self.lock = threading.Lock()
-        self.sub = None
 
-    def on_message(self, data):
-        self.meter.add(len(data))
-        now = time.time()
-        if now - self.last_decode < self.period:
-            return
-        self.last_decode = now
-        try:
-            jpeg, info = self.encode(data)
-        except Exception as e:   # noqa: B902 - shown in the console
-            jpeg, info = None, {'error': str(e)}
+    def get(self):
+        """(frame number, JPEG, info) after taking the latest image, if a new one arrived."""
         with self.lock:
-            if jpeg is not None:
-                self.jpeg = jpeg
-            self.info = info
+            self.last_viewer = time.time()
+            data = self.latest.take()
+            if data is not None:
+                try:
+                    jpeg, info = self.encode(data)
+                except Exception as e:   # noqa: B902 - shown in the console
+                    jpeg, info = None, {'error': str(e)}
+                if jpeg is not None:
+                    self.jpeg = jpeg
+                    self.seq += 1
+                self.info = info
+            return self.seq, self.jpeg, dict(self.info, hz=self.latest.rate())
 
     def encode(self, data):
         if self.compressed:
@@ -141,41 +217,37 @@ class Preview:
             img = cv2.imdecode(np.frombuffer(bytes(msg.data), np.uint8), cv2.IMREAD_UNCHANGED)
             enc = msg.format
         else:
-            msg = deserialize_message(data, Image)
-            enc = msg.encoding
-            buf = np.frombuffer(bytes(msg.data), np.uint8)
+            height, width, enc, step, pixels = parse_image(data)
+            buf = np.frombuffer(pixels, np.uint8)
             if enc in ('mono8', '8UC1'):
-                img = buf.reshape(msg.height, msg.step)[:, :msg.width]
+                img = buf.reshape(height, step)[:, :width]
             elif enc in ('rgb8', 'bgr8'):
-                img = buf.reshape(msg.height, msg.step)[:, :msg.width * 3].reshape(
-                    msg.height, msg.width, 3)
+                img = buf.reshape(height, step)[:, :width * 3].reshape(height, width, 3)
                 if enc == 'rgb8':
-                    img = img[:, :, ::-1]
+                    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
             elif enc in ('16UC1', 'mono16'):
-                img = buf.view(np.uint16).reshape(msg.height, msg.step // 2)[:, :msg.width]
+                img = buf.view(np.uint16).reshape(height, step // 2)[:, :width]
             else:
                 raise ValueError(f'encoding {enc} not supported')
         info = {'encoding': enc, 'width': int(img.shape[1]), 'height': int(img.shape[0])}
+        # Subsampling (every n-th pixel) to about the preview width: no interpolation cost; the
+        # statistics below are computed on the small image (close enough for a preview).
+        n = max(1, int(img.shape[1] // self.width))
+        if n > 1:
+            img = img[::n, ::n]
         if img.dtype == np.uint16:   # depth in mm: colored 0-6 m, black = no depth
             valid = img > 0
             info['valid_depth_pct'] = round(100.0 * valid.mean(), 1)
-            scaled = np.clip(img.astype(np.float32) * (255.0 / 6000.0), 0, 255).astype(np.uint8)
+            scaled = cv2.convertScaleAbs(img, alpha=255.0 / 6000.0)
             img = cv2.applyColorMap(scaled, cv2.COLORMAP_TURBO)
             img[~valid] = 0
         else:
             gray = img if img.ndim == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            info['saturated_pct'] = round(100.0 * (gray >= 250).mean(), 1)
-            info['mean'] = round(float(gray.mean()), 1)
-        if img.shape[1] > self.width:
-            h = int(img.shape[0] * self.width / img.shape[1])
-            img = cv2.resize(img, (self.width, h), interpolation=cv2.INTER_AREA)
-        ok, out = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            info['saturated_pct'] = round(100.0 * np.count_nonzero(gray >= 250) / gray.size, 1)
+            info['mean'] = round(float(cv2.mean(gray)[0]), 1)
+        img = np.ascontiguousarray(img)
+        ok, out = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 65])
         return (out.tobytes() if ok else None), info
-
-    def latest(self):
-        with self.lock:
-            self.last_viewer = time.time()
-            return self.jpeg
 
 
 class Slam:
@@ -190,6 +262,7 @@ class Slam:
             self.paths = {}       # topic -> [[t, x, y, z], ...] subsampled
             self.last_point = {}
             self.diag = {}        # topic -> dict
+            self.landmarks = {}   # topic -> (number, [x0, y0, x1, y1, ...]) top view cells
             self.events = collections.deque(maxlen=50)
             self.generation = time.time()
 
@@ -226,22 +299,45 @@ class Slam:
                                 'type': EVENT_NAMES.get(e.type, str(e.type)),
                                 'description': e.description})
 
-    def state(self, since):
-        """Trajectory points after the given stamps (incremental polling)."""
+    def set_landmarks(self, topic, msg):
+        """Landmark cloud of pq_cuvslam reduced to the occupied cells of a top view grid."""
+        offsets = {f.name: f.offset for f in msg.fields}
+        n = msg.width * msg.height
+        if n == 0 or 'x' not in offsets or 'y' not in offsets:
+            xy = np.zeros((0, 2))
+        else:
+            raw = np.frombuffer(bytes(msg.data), np.uint8).reshape(n, msg.point_step)
+            xy = np.stack([raw[:, offsets[k]:offsets[k] + 4].copy().view(np.float32)[:, 0]
+                           for k in ('x', 'y')], axis=1)
+            xy = xy[np.isfinite(xy).all(axis=1)]
+        cells = np.unique(np.floor(xy / LANDMARK_CELL_M).astype(np.int64), axis=0)[:40000]
+        flat = np.round((cells + 0.5) * LANDMARK_CELL_M, 2).reshape(-1).tolist()
+        with self.lock:
+            number = self.landmarks.get(topic, (0, None))[0] + 1
+            self.landmarks[topic] = (number, flat)
+
+    def state(self, since, have_landmarks):
+        """Trajectory points after the given stamps, landmarks if changed (incremental polling)."""
         with self.lock:
             paths = {}
             for topic, pts in self.paths.items():
                 after = since.get(topic, -1.0)
                 paths[topic] = [p for p in pts if p[0] > after] if after >= 0 else list(pts)
+            landmarks = {t: {'number': n, 'xy': xy} for t, (n, xy) in self.landmarks.items()
+                         if have_landmarks.get(t) != n}
             return {'generation': self.generation, 'paths': paths, 'diagnostics': dict(self.diag),
-                    'events': list(self.events)}
+                    'events': list(self.events), 'landmarks': landmarks}
 
 
 class RosBridge(Node):
 
-    def __init__(self, preview_fps=5.0, preview_width=424):
+    def __init__(self, preview_width=320):
         super().__init__('pq_console')
-        self.preview_fps, self.preview_width = preview_fps, preview_width
+        self.preview_width = preview_width
+        # Subscriptions read on request: this node is never spun by an executor.
+        self.lazy = rclpy.create_node('pq_console_latest')
+        self.lazy_lock = threading.Lock()
+        self.landmark_subs = {}   # topic -> (Latest, last take time)
         self.lock = threading.Lock()
         self.graph = {'nodes': [], 'topics': []}
         self.measured = {}        # topic -> (Meter, subscription, until)
@@ -286,11 +382,13 @@ class RosBridge(Node):
             graph = {'nodes': list(self.graph['nodes']),
                      'topics': [dict(t) for t in self.graph['topics']]}
             meters = {k: v[0] for k, v in self.measured.items()}
-            meters.update({k: p.meter for k, p in self.previews.items()})
+            previews = {k: p.latest for k, p in self.previews.items()}
         for t in graph['topics']:
             if t['name'] in meters:
                 t.update(meters[t['name']].stats())
                 t['measuring'] = True
+            elif t['name'] in previews:
+                t.update(hz=previews[t['name']].rate(), kbps=None, age_s=None, measuring=True)
         return graph
 
     def topic_type(self, topic):
@@ -325,12 +423,16 @@ class RosBridge(Node):
                 if now > until:
                     drop.append(sub)
                     del self.measured[topic]
+            lazy_drop = []
             for topic, p in list(self.previews.items()):
                 if now - p.last_viewer > 10.0:
-                    drop.append(p.sub)
+                    lazy_drop.append(p.latest.sub)
                     del self.previews[topic]
         for sub in drop:
             self.destroy_subscription(sub)
+        with self.lazy_lock:
+            for sub in lazy_drop:
+                self.lazy.destroy_subscription(sub)
 
     # ---- previews ----
 
@@ -343,16 +445,46 @@ class RosBridge(Node):
         if type_name not in ('sensor_msgs/msg/Image', 'sensor_msgs/msg/CompressedImage'):
             raise ValueError(f'{topic} is not an image topic ({type_name})')
         compressed = type_name.endswith('CompressedImage')
-        p = Preview(topic, compressed, self.preview_fps, self.preview_width)
-        p.sub = self.create_subscription(CompressedImage if compressed else Image, topic,
-                                         p.on_message, qos_profile_sensor_data, raw=True)
+        latest = Latest(self.lazy, self.lazy_lock, CompressedImage if compressed else Image, topic)
+        p = Preview(latest, compressed, self.preview_width)
         with self.lock:
+            if topic in self.previews:   # created meanwhile by another request
+                with self.lazy_lock:
+                    self.lazy.destroy_subscription(latest.sub)
+                return self.previews[topic]
             self.previews[topic] = p
         return p
 
-    def previews_state(self):
-        with self.lock:
-            return {t: dict(p.info, **p.meter.stats()) for t, p in self.previews.items()}
+    def frames(self, topics, have):
+        """Latest frame of each topic: {topic: {seq, info, jpeg (if newer than have)}}."""
+        import base64
+        out = {}
+        for topic, seen in zip(topics, have):
+            try:
+                seq, jpeg, info = self.preview(topic).get()
+            except ValueError as e:
+                out[topic] = {'seq': 0, 'info': {'error': str(e)}}
+                continue
+            f = {'seq': seq, 'info': info}
+            if jpeg is not None and seq != seen:
+                f['jpeg'] = base64.b64encode(jpeg).decode()
+            out[topic] = f
+        return out
+
+    def slam_state(self, since, have_landmarks):
+        """SLAM state; the landmark clouds are taken at most once per second."""
+        now = time.time()
+        for topic, (latest, last) in list(self.landmark_subs.items()):
+            if now - last < 1.0:
+                continue
+            self.landmark_subs[topic] = (latest, now)
+            data = latest.take()
+            if data is not None:
+                try:
+                    self.slam.set_landmarks(topic, deserialize_message(data, PointCloud2))
+                except Exception as e:   # noqa: B902 - malformed cloud: keep the last one
+                    self.get_logger().warning(f'{topic}: {e}')
+        return self.slam.state(since, have_landmarks)
 
     # ---- SLAM ----
 
@@ -367,6 +499,10 @@ class RosBridge(Node):
             elif (FrameDiagnostics and type_name == 'pq_cuvslam_interfaces/msg/FrameDiagnostics'):
                 self.slam_subs[name] = self.create_subscription(
                     FrameDiagnostics, name, lambda m, n=name: self.slam.diagnostics(n, m), 10)
+            elif type_name == 'sensor_msgs/msg/PointCloud2' and LANDMARKS_RE.search(name):
+                if name not in self.landmark_subs:
+                    self.landmark_subs[name] = (Latest(self.lazy, self.lazy_lock, PointCloud2, name), 0.0)
+                self.slam_subs[name] = None
             elif SlamEvent and type_name == 'pq_cuvslam_interfaces/msg/SlamEvent':
                 self.slam_subs[name] = self.create_subscription(
                     SlamEvent, name, lambda m, n=name: self.slam.event(n, m), 50)
