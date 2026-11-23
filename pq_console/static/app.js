@@ -490,7 +490,7 @@ function renderCameras() {
   const rows = ((camInfo && camInfo.configured) || s.cameras.map((name) => ({ name }))).map((c) => {
     const v = (s.emitters || {})[c.name];
     const usb = c.usb ? `${c.usb.speed_mbps >= 5000 ? chip('USB 3', 'ok') : chip('USB 2: low bandwidth', 'bad')}` :
-      c.connected === false ? chip('not connected', 'bad') : '';
+      c.connected === false ? chip('not connected', 'bad') : c.connected === null ? chip('usb_serial not set', 'warn') : '';
     const driver = c.driver ? chip('driver running', 'ok') : chip('driver off');
     const em = !c.driver ? '' : v === null || v === undefined ? chip('emitter ?', 'warn')
       : v ? chip('emitter ON', 'bad') + ` <button class="small danger" data-emitter="${esc(c.name)}">turn off</button>` : chip('emitter off', 'ok');
@@ -500,8 +500,9 @@ function renderCameras() {
   $('cam-table').innerHTML = `<thead><tr><th>Name</th><th>Model</th><th>Serial</th><th>USB</th><th>Driver</th><th>IR emitter</th></tr></thead>
     <tbody>${rows.join('') || '<tr><td colspan="6" class="muted">no cameras in the configuration</td></tr>'}</tbody>`;
   const other = (camInfo && camInfo.other) || [];
-  $('cam-other').innerHTML = other.length ? 'Connected but not in the configuration: ' +
-    other.map((u) => `${esc(u.model)} <code>${esc(u.serial)}</code>`).join(', ') : '';
+  $('cam-other').innerHTML = other.length ? 'RealSense on USB not linked to a camera of the configuration (set its ' +
+    '<code>usb_serial</code>, the USB serial is not the one of the label): ' +
+    other.map((u) => `${esc(u.model)} USB serial <code>${esc(u.serial)}</code> ${u.speed_mbps >= 5000 ? 'USB 3' : 'USB 2'}`).join(', ') : '';
   $('cam-table').querySelectorAll('[data-emitter]').forEach((b) => b.onclick = () =>
     post('emitter', { camera: b.dataset.emitter, value: 0 }).then(refreshState));
   $('cam-start').disabled = s.cameras_running || !s.cameras.length || !!(s.job && s.job.state === 'running');

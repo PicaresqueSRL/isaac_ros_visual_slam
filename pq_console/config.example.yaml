@@ -21,8 +21,10 @@ tools_dir: /home/user/workspaces/pq_cuvslam/isaac_ros_visual_slam/tools   # Reru
 pylib_dir: /home/user/workspaces/pq_cuvslam/pylib   # rerun-sdk (tools/rerun_layout.py); empty: no .rrd
 dual_cam1_profile: cam1_stereo_imu
 cameras:                         # serial numbers stay in this local file
-  - {name: cam1, serial: "000000000000"}
-  - {name: cam2, serial: "000000000000"}
+  # serial: RealSense serial (label, serial_no of the driver); usb_serial: serial of the USB
+  # descriptor (ASIC serial, another number), shown on the Cameras page: links the USB device.
+  - {name: cam1, serial: "000000000000", usb_serial: ""}
+  - {name: cam2, serial: "000000000000", usb_serial: ""}
 camera_params:                   # realsense2_camera launch arguments
   enable_color: true
   enable_depth: true

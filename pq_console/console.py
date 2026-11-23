@@ -117,11 +117,14 @@ class Console:
         by_serial = {u['serial']: u for u in usb}
         nodes = set(self.ros.topics_state()['nodes'])
         configured = []
+        # The USB descriptor of a D455 carries the ASIC serial, not the RealSense serial of the
+        # label (serial_no of the driver): usb_serial in the configuration links the two.
         for c in self.c.cameras:
-            u = by_serial.get(c.serial)
-            configured.append({'name': c.name, 'serial': c.serial, 'connected': bool(u),
+            u = by_serial.get(c.usb_serial) or by_serial.get(c.serial)
+            configured.append({'name': c.name, 'serial': c.serial, 'connected': bool(u) if
+                               (c.usb_serial or not usb) else None,
                                'usb': u, 'driver': f'/{c.name}' in nodes})
-        known = {c.serial for c in self.c.cameras}
+        known = {c.usb_serial or c.serial for c in self.c.cameras}
         return {'configured': configured, 'other': [u for u in usb if u['serial'] not in known],
                 'presets': sessions_mod.PRESETS, 'preset': self.preset}
 

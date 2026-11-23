@@ -24,7 +24,8 @@ import yaml
 @dataclass
 class CameraConfig:
     name: str
-    serial: str
+    serial: str               # RealSense serial number (label, serial_no of the driver)
+    usb_serial: str = ''      # serial of the USB descriptor (ASIC serial): another number
 
 
 @dataclass
@@ -85,7 +86,8 @@ def load(path):
     host, _, port = listen.rpartition(':')
     c.listen_host, c.listen_port = host or c.listen_host, int(port)
     cameras = raw.pop('cameras', []) or []
-    c.cameras = [CameraConfig(str(x['name']), str(x['serial'])) for x in cameras]
+    c.cameras = [CameraConfig(str(x['name']), str(x['serial']), str(x.get('usb_serial', '')))
+                 for x in cameras]
     for key, value in raw.items():
         if not hasattr(c, key):
             raise ValueError(f'{path}: unknown key {key}')
