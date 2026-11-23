@@ -123,39 +123,78 @@ private:
     return static_cast<int64_t>(t.sec) * 1'000'000'000 + t.nanosec;
   }
 
+  struct PendingHealth
+  {
+    uint8_t health;
+    std::string reasons;
+  };
+
   void OnOdometry(const std::string & name, const nav_msgs::msg::Odometry::ConstSharedPtr & m)
   {
-    auto & cache = pending_[name];
     tf2::Transform pose;
     tf2::fromMsg(m->pose.pose, pose);
-    cache[Stamp(m->header.stamp)] = pose;
-    while (cache.size() > 30) {
-      cache.erase(cache.begin());
-    }
+    const int64_t stamp = Stamp(m->header.stamp);
+    pending_odom_[name][stamp] = pose;
+    TryProcess(name, stamp);
   }
 
-  // The diagnostics of a frame come right after its guarded odometry: the frame is processed
-  // when both are there.
   void OnDiagnostics(
     const std::string & name,
     const pq_cuvslam_interfaces::msg::FrameDiagnostics::ConstSharedPtr & d)
   {
     const int64_t stamp = Stamp(d->header.stamp);
-    auto & cache = pending_[name];
-    const auto it = cache.find(stamp);
-    if (it == cache.end()) {
+    pending_health_[name][stamp] = {d->health, d->health_reasons};
+    TryProcess(name, stamp);
+  }
+
+  // A frame is processed when its guarded odometry and its diagnostics (health) have both
+  // arrived; the two topics may deliver them in either order.
+  void TryProcess(const std::string & name, int64_t stamp)
+  {
+    auto & odom = pending_odom_[name];
+    auto & health = pending_health_[name];
+    const auto o = odom.find(stamp);
+    const auto h = health.find(stamp);
+    if (o == odom.end() || h == health.end()) {
+      Trim(odom);
+      Trim(health);
       return;
     }
-    const tf2::Transform pose = it->second;
-    cache.erase(cache.begin(), std::next(it));
-    const bool bad = d->health != 0;
-    const SelectorResult r = selector_.Update(name, stamp, pose, bad);
+    const tf2::Transform pose = o->second;
+    const PendingHealth state = h->second;
+    odom.erase(odom.begin(), std::next(o));
+    health.erase(health.begin(), std::next(h));
+    int64_t & last = last_stamp_[name];
+    if (stamp <= last) {
+      return;   // older than a frame already processed
+    }
+    last = stamp;
+    Process(name, stamp, pose, state);
+  }
+
+  template<typename Map>
+  static void Trim(Map & m)
+  {
+    while (m.size() > 60) {
+      m.erase(m.begin());
+    }
+  }
+
+  void Process(
+    const std::string & name, int64_t stamp, const tf2::Transform & pose,
+    const PendingHealth & state)
+  {
+    builtin_interfaces::msg::Time stamp_msg;
+    stamp_msg.sec = static_cast<int32_t>(stamp / 1'000'000'000);
+    stamp_msg.nanosec = static_cast<uint32_t>(stamp % 1'000'000'000);
+    const SelectorResult r = selector_.Update(name, stamp, pose, state.health != 0);
     if (r.switched_from) {
       const std::string text = "odometry from " + r.selected + " instead of " +
-        *r.switched_from + " (" + d->health_reasons + ")";
+        *r.switched_from + " (" + state.reasons + ")";
       RCLCPP_WARN(get_logger(), "Camera switch: %s", text.c_str());
       pq_cuvslam_interfaces::msg::SlamEvent e;
-      e.header = d->header;
+      e.header.stamp = stamp_msg;
+      e.header.frame_id = odom_frame_;
       e.type = pq_cuvslam_interfaces::msg::SlamEvent::CAMERA_SWITCH;
       e.description = text;
       events_pub_->publish(e);
@@ -164,7 +203,7 @@ private:
     }
     if (r.fused) {
       nav_msgs::msg::Odometry out;
-      out.header.stamp = d->header.stamp;
+      out.header.stamp = stamp_msg;
       out.header.frame_id = odom_frame_;
       out.child_frame_id = reference_frame_;
       tf2::toMsg(*r.fused, out.pose.pose);
@@ -215,7 +254,9 @@ private:
   std::string reference_frame_;
   std::string odom_frame_;
   std::string run_output_dir_;
-  std::map<std::string, std::map<int64_t, tf2::Transform>> pending_;
+  std::map<std::string, std::map<int64_t, tf2::Transform>> pending_odom_;
+  std::map<std::string, std::map<int64_t, PendingHealth>> pending_health_;
+  std::map<std::string, int64_t> last_stamp_;
   std::vector<Row> rows_;
   std::vector<std::pair<int64_t, std::string>> switches_;
   std::vector<rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr> odom_subs_;
