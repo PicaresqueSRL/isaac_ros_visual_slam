@@ -1,0 +1,34 @@
+# pq_console configuration: copy to config.yaml (not tracked by git) and adapt.
+# All paths are host paths (the containers mount them at the same path).
+listen: 127.0.0.1:8080          # reached through an ssh tunnel (connect.sh)
+data_dir: /home/user/workspaces/pq_cuvslam/live   # bags/, runs/, rerun/
+# bags_dir: /home/user/bags     # recordings elsewhere (default data_dir/bags)
+ros_domain_id: 7
+dds_transports: LARGE_DATA       # Fast DDS: large images between containers
+# RealSense driver, recorder and player (Jetson: the Isaac ROS realsense image)
+camera_image: nvcr.io/nvidia/isaac/ros:isaac_ros-realsense_<tag>
+slam_image: pq_cuvslam:dev
+gpu_args: [--runtime, nvidia]    # PC: [--gpus, all]
+slam_extra_args: []              # more docker run arguments of the SLAM containers
+# install_dir: /path/to/ws/install   # local pq_cuvslam build over /ws/install (console and SLAM)
+tools_dir: /home/user/workspaces/pq_cuvslam/isaac_ros_visual_slam/tools   # Rerun conversion
+pylib_dir: /home/user/workspaces/pq_cuvslam/pylib   # rerun-sdk (tools/rerun_layout.py); empty: no .rrd
+dual_cam1_profile: cam1_stereo_imu
+cameras:                         # serial numbers stay in this local file
+  - {name: cam1, serial: "000000000000"}
+  - {name: cam2, serial: "000000000000"}
+camera_params:                   # realsense2_camera launch arguments
+  enable_color: true
+  enable_depth: true
+  enable_infra1: true
+  enable_infra2: true
+  enable_accel: true
+  enable_gyro: true
+  unite_imu_method: 2
+  gyro_fps: 200
+  accel_fps: 100
+  pointcloud.enable: false
+  align_depth.enable: false      # true: aligned_depth_to_color (RGB-D profiles), more CPU
+  depth_module.depth_profile: 848x480x30
+  depth_module.infra_profile: 848x480x30
+  rgb_camera.color_profile: 640x480x30

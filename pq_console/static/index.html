@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pq console</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>pq console</h1>
+  <nav>
+    <button class="tab active" data-tab="live">Live</button>
+    <button class="tab" data-tab="sessions">Sessions</button>
+    <button class="tab" data-tab="graph">Nodes &amp; topics</button>
+  </nav>
+  <div id="status" class="status"></div>
+</header>
+<div id="error" class="error hidden"></div>
+
+<main>
+<section id="tab-live" class="tab-body">
+  <div class="row">
+    <div class="card">
+      <h2>Cameras</h2>
+      <div id="cameras"></div>
+      <div class="actions">
+        <button id="cam-start">Start cameras</button>
+        <button id="cam-stop" class="secondary">Stop cameras</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Recording</h2>
+      <div class="form">
+        <label>Name <input id="rec-name" size="24"></label>
+        <label><input type="checkbox" id="rec-depth" checked> depth</label>
+        <label><input type="checkbox" id="rec-aligned"> depth aligned to RGB</label>
+      </div>
+      <div id="rec-state" class="muted"></div>
+      <div class="actions">
+        <button id="rec-start">Start recording</button>
+        <button id="rec-stop" class="danger">Stop recording</button>
+      </div>
+    </div>
+    <div class="card" id="job-card-live">
+      <h2>SLAM replay</h2>
+      <div id="job-live" class="muted">none</div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="preview" data-slot="0"></div>
+    <div class="preview" data-slot="1"></div>
+    <div class="preview" data-slot="2"></div>
+    <div class="preview" data-slot="3"></div>
+  </div>
+
+  <div class="row">
+    <div class="card wide">
+      <h2>SLAM <button id="slam-reset" class="small secondary">clear</button></h2>
+      <canvas id="traj" width="640" height="420"></canvas>
+      <div id="legend" class="legend"></div>
+    </div>
+    <div class="card">
+      <h2>Tracker</h2>
+      <div id="slam-diag" class="muted">no SLAM running</div>
+      <h3>Events</h3>
+      <ul id="slam-events" class="events"></ul>
+    </div>
+  </div>
+</section>
+
+<section id="tab-sessions" class="tab-body hidden">
+  <div class="card" id="job-card">
+    <h2>Job</h2>
+    <div id="job" class="muted">none</div>
+    <pre id="job-log"></pre>
+    <div class="actions"><button id="job-stop" class="danger">Stop</button></div>
+  </div>
+  <div class="card">
+    <h2>Recordings</h2>
+    <div class="form">
+      <label>SLAM profile <select id="profile"></select></label>
+      <label><input type="checkbox" id="rerun" checked> Rerun file</label>
+      <span id="profile-desc" class="muted"></span>
+    </div>
+    <table id="recordings"><thead><tr>
+      <th>Name</th><th>Date</th><th>Duration</th><th>Size</th><th>Cameras</th><th>Depth</th><th></th>
+    </tr></thead><tbody></tbody></table>
+  </div>
+  <div class="card">
+    <h2>SLAM runs</h2>
+    <table id="runs"><thead><tr>
+      <th>Name</th><th>Mode</th><th>Frames</th><th>Path</th><th>Start-end</th><th>Rejected</th>
+      <th>Resets</th><th>Loop closures</th><th>track()</th><th>Rerun file</th>
+    </tr></thead><tbody></tbody></table>
+  </div>
+</section>
+
+<section id="tab-graph" class="tab-body hidden">
+  <div class="row">
+    <div class="card">
+      <h2>Nodes</h2>
+      <ul id="nodes" class="plain"></ul>
+    </div>
+    <div class="card wide">
+      <h2>Topics <input id="topic-filter" placeholder="filter" size="20"></h2>
+      <table id="topics"><thead><tr>
+        <th>Topic</th><th>Type</th><th>Pub</th><th>Sub</th><th>Hz</th><th>kbit/s</th>
+        <th>Last</th><th></th>
+      </tr></thead><tbody></tbody></table>
+      <p class="muted">Rates are measured only on request (60 s), and for the previewed images.</p>
+    </div>
+  </div>
+</section>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>
