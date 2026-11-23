@@ -32,6 +32,7 @@ This file records every change made to it. Update it with each change.
 | Configuration | launch parameters + remappings + `static_transform_publisher` | YAML profiles (`profile`): cameras, topics, frames, IMU, depth, extrinsics with source, mode |
 | Modes | 0, 1, 2 | also 3 (Mono) and 4 (Multisensor, cuVSLAM >= 17 with cuNLS; optional depth and IMU) |
 | Launch files | Isaac Sim, RealSense, ZED, multi-camera, core | standalone node, `slam.launch.py profile:=...` |
+| Tools | none | `tools/` (bag analysis, benchmark, Rerun files) |
 | Tests | integration tests on NVIDIA r2b bags | unit tests only (sequencer, vendored isaac_common) |
 
 ## Log
@@ -314,6 +315,31 @@ This file records every change made to it. Update it with each change.
 - Real-time replays: the fused odometry follows cam1 VIO where cam1 is healthy (staircases_102
   0.59 deg against 1.27 deg with cam2); with frequent switches (elevator_down_107) it is worse
   than either camera: switching policy to refine.
+
+**Rerun files** (`eabcf35`, `0f43cc1`, `0a58e72`, `fbd44d7`, `3acac07`, `0cf435f`, `dc6ccd6`)
+- `tools/to_rerun.py`: one trajectory per odometry topic, trails and paths throttled (a 1.3 GB
+  file did not open), all SLAM data in one `world` frame (the map/odom frames of the dual VIO
+  are not connected in the recording).
+- `tools/rerun_layout.py`: `.rrd` with a fixed layout (cam2 IR and RGB above, cam1 below, SLAM
+  in 3D on the right, events panel); loop closures as markers on the trajectory and their
+  landmarks in red, SLAM events from the SLAM bag (`--slam-bag`) or from the `events.csv` of
+  the run (`--run-dir`).
+
+**One SLAM with both cameras: several depth images** (`34dd636`, `3a3b950`)
+- Multisensor with one depth image per camera (`depth_camera_ids`, profile `depth` as a list);
+  each depth goes with the device of its camera in the software sync, the virtual camera
+  (nearest-neighbour) and the rotation compensation. Virtual cameras with side bands
+  (`pad_left`, `pad_right`: e.g. a 640x480 RGB widened to 848x480).
+- Profiles `cam1_cam2_ir_imu`, `cam1_cam2_rgbd`, `cam1_cam2_rgbd_imu`,
+  `cam1_cam2_ir_rgb_depth_imu`; `tools/align_depth.py` (depth aligned to the RGB for bags
+  recorded without `align_depth`).
+- Fix: the depth list kept the default camera of the first parameter read (the parameters are
+  read again after the profile): a Multisensor profile without depth waited for a depth image
+  and the Jetson ran out of memory.
+- Real-time replays on walk_dual_3 (Jetson, 35-37 m walk), start-end distance: two VIO + selector
+  1.21 m, multicamera 4 IR 0.70 m, 4 IR + IMU 0.20 m (16 rejected frames), RGB-D of both
+  cameras 0.42 m (none rejected, most loop closures), RGB-D + IMU 0.71 m; IR + RGB + depth + IMU
+  drops a third of the frames on the Orin Nano (CPU image preparation).
 
 ## Notes
 
