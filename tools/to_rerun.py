@@ -82,12 +82,19 @@ def to_bgr(img):
     return None
 
 
+def rerun_base(topic):
+    """Rerun name of a SLAM topic: /visual_slam/tracking/odometry -> /rerun/odometry,
+    /cam1_vio/visual_slam/tracking/odometry_guarded -> /rerun/cam1_vio/odometry_guarded."""
+    rel = topic.replace('/visual_slam/tracking', '').replace('/visual_slam', '').strip('/')
+    return '/rerun/' + rel
+
+
 def write_recording(path, write, s):
     """SLAM topics of a recording of record_slam.sh. Returns the first odometry stamp (ns)."""
     reader = open_reader(path)
     types = {t.name: t.type for t in reader.get_all_topics_and_types()}
     classes = {}
-    trail = []
+    trails = {}
     first_odom = None
     while reader.has_next():
         topic, data, t_rec = reader.read_next()
@@ -113,16 +120,18 @@ def write_recording(path, write, s):
             pose = PoseStamped()
             pose.header = msg.header
             pose.pose = msg.pose.pose
-            write('/rerun/odometry/pose', 'geometry_msgs/msg/PoseStamped', pose, t)
+            base = rerun_base(topic)
+            write(base + '/pose', 'geometry_msgs/msg/PoseStamped', pose, t)
             p = msg.pose.pose.position
+            trail = trails.setdefault(topic, [])
             trail.append((p.x, p.y, p.z))
-            write('/rerun/odometry/trail', 'sensor_msgs/msg/PointCloud2',
+            write(base + '/trail', 'sensor_msgs/msg/PointCloud2',
                   create_cloud_xyz32(msg.header, trail), t)
         elif type_ in ('nav_msgs/msg/Path', 'geometry_msgs/msg/PoseArray'):
             poses = [ps.pose for ps in msg.poses] if type_ == 'nav_msgs/msg/Path' \
                 else list(msg.poses)
             pts = [(q.position.x * s, q.position.y * s, q.position.z * s) for q in poses]
-            write('/rerun/' + topic.rstrip('/').split('/')[-1], 'sensor_msgs/msg/PointCloud2',
+            write(rerun_base(topic), 'sensor_msgs/msg/PointCloud2',
                   create_cloud_xyz32(msg.header, pts), t)
         elif type_ == 'sensor_msgs/msg/PointCloud2':
             if s != 1.0:
