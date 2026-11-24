@@ -268,7 +268,8 @@ function renderJob() {
   $('pb-pos').textContent = fmtDur(pos);
   $('pb-dur').textContent = fmtDur(dur);
   const last = j && j.log.length ? j.log[j.log.length - 1].slice(9) : '';
-  $('job-line').textContent = !j ? (state.cameras_running ? 'cameras running: stop them to play a bag' : '')
+  $('cams-busy').classList.toggle('hidden', !(state.cameras_running || state.recording));
+  $('job-line').textContent = !j ? ''
     : `${j.kind === 'view' ? 'view' : 'SLAM'} ${j.name}: ${j.state}` +
       (running ? ' · ' + fmtDur(state.time - j.started) : '') + (last && last !== j.state ? ' — ' + last : '');
   $('job-log').textContent = j && j.kind === 'replay' ? j.log.join('\n') : '';
@@ -289,6 +290,10 @@ $('pb-play').onclick = () => {
   }
 };
 $('pb-stop').onclick = () => post('job/stop').then(refreshState);
+$('bags-stop-cams').onclick = () => {
+  if (state && state.recording) { showError('a recording is running: stop it on the Cameras page first'); return; }
+  if (confirm('Stop the cameras?')) post('cameras/stop').then(refreshState);
+};
 $('swap-cams').onclick = () => {
   save('swap_cams', !load('swap_cams', false));
   if (bag) renderBag();

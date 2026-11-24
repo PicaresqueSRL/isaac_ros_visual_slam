@@ -157,3 +157,4 @@ button.round.playing .i-pause { display: inline; }
 #slam3d .overlay { position: absolute; left: 8px; top: 6px; font-size: 12px; color: var(--muted);
   background: var(--card); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; pointer-events: none; z-index: 1; }
 #slam3d .overlay:empty { display: none; }
+.notice { margin-top: 8px; padding: 6px 10px; border-radius: 6px; background: var(--bg); border-left: 4px solid var(--warn); font-size: 13px; text-align: center; }
