@@ -305,7 +305,7 @@ class Console:
 
     def act(self, name, body):
         if name == 'cameras/start':
-            self.sessions.start_cameras()
+            self.sessions.start_cameras(bool(body.get('reset', False)))
             threading.Thread(target=self.apply_startup_settings, daemon=True).start()
         elif name == 'cameras/stop':
             self.sessions.stop_cameras()

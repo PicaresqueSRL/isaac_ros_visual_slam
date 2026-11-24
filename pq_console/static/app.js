@@ -673,7 +673,7 @@ $('rec-stop').onclick = async () => {
   if (r) showError('');
   refreshState();
 };
-$('cam-start').onclick = () => post('cameras/start').then(() => { refreshState(); setTimeout(refreshCameras, 8000); });
+$('cam-start').onclick = () => post('cameras/start', { reset: $('cam-reset').checked }).then(() => { refreshState(); setTimeout(refreshCameras, 8000); });
 $('cam-stop').onclick = () => confirm('Stop the cameras?') && post('cameras/stop').then(() => { refreshState(); refreshCameras(); });
 
 // Live view: every image stream the cameras publish, one row per camera.

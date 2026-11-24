@@ -174,11 +174,19 @@ class Sessions:
     def cameras_running(self):
         return running('pq_cams')
 
-    def start_cameras(self):
+    def start_cameras(self, reset=False):
+        """
+        Start the drivers of the cameras of the configuration.
+
+        reset: hardware reset of the cameras at start (initial_reset): after a reboot the D455
+        can report a Motion Module hardware error without it.
+        """
         if not self.c.cameras or not self.c.camera_image:
             raise ValueError('no cameras in the configuration')
-        params = ' '.join(f'{k}:={shlex.quote(str(v).lower() if isinstance(v, bool) else str(v))}'
-                          for k, v in self.c.camera_params.items())
+        value = lambda v: str(v).lower() if isinstance(v, bool) else str(v)  # noqa: E731
+        params = ' '.join(f'{k}:={shlex.quote(value(v))}' for k, v in self.c.camera_params.items())
+        if reset:
+            params = 'initial_reset:=true ' + params
         launches = []
         for i, cam in enumerate(self.c.cameras):
             launches.append(
