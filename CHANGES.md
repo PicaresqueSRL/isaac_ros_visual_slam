@@ -355,6 +355,14 @@ This file records every change made to it. Update it with each change.
 
 ## Notes
 
+- Isolated slow `track()` in VIO with cuVSLAM 16 and 17 (200-460 ms once per run, around frame
+  60-250; not in 15): it is the visual-inertial initialization of cuVSLAM (`init_sba` in
+  `libs/pipelines/track_online_inertial.cpp`: bundle adjustment over 20 keyframes, 3-4 thousand
+  points, 10 iterations), run once inside `Track()` when the IMU state becomes initialized, and
+  again after a tracker reset. Not caused by cuNLS or by the lazy loading of CUDA kernels
+  (`CUDA_MODULE_LOADING=EAGER`: same), no setting in the API. In real time on the Jetson it
+  does not drop frames.
+
 - Frames processed: only complete stereo pairs reach the tracker (e.g. `loop_closure`: 826
   infra1 and 823 infra2 images, 804 pairs). The replay processes all of them except the
   first, which arrives before the tracker is initialized (as in the live node), and the
