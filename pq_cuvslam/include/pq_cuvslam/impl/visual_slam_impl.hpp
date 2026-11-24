@@ -211,10 +211,14 @@ struct VisualSlamNode::VisualSlamImpl
     std::vector<double> offsets_ms;     // max |offset| of the devices, per rig frame
     std::vector<double> rotations_deg;  // compensated rotation, per compensated image
     uint64_t compensated_images = 0;
+    uint64_t small_rotations = 0;       // images not warped: rotation below compensation_min_deg
     uint64_t gyro_missing = 0;          // images not compensated: gyroscope not available
+    std::vector<double> prep_ms;        // image preparation of the rig frame (CPU)
   } sync_stats;
-  // Capture offset of the rig frames, by reference stamp, for the run output.
+  // Capture offset and preparation time of the rig frames, by reference stamp, for the run
+  // output.
   std::map<int64_t, double> frame_sync_offset_ms;
+  std::map<int64_t, double> frame_prep_ms;
 
   // Diagnostics: name and topic of every input image (camera names of the profile, or
   // camera_<i>; "depth"), state for the events.
@@ -227,6 +231,8 @@ struct VisualSlamNode::VisualSlamImpl
   // camera_info and the profile. Images are converted before the rotation compensation.
   std::map<int, VirtualCamera> virtual_cameras;
   ImageType ToVirtual(int camera, const ImageType & image);
+  // Input image as given to cuVSLAM: RGB to mono8 (rgb_to_mono), then the virtual camera.
+  ImageType Prepare(int index, const ImageType & image);
   bool last_loop_closure = false;
 
   // Sequencer used to sequence imu and image messages.

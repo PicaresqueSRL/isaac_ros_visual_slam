@@ -95,6 +95,8 @@ sync:                                 # between devices (multicamera, multisenso
                                       # (default 34 for software, 2 for hardware)
   rotation_compensation: true         # software only: warp to the reference capture time
   compensation_border_px: 16          # border excluded from tracking on warped images
+  compensation_min_deg: 0.1           # smaller rotations are not compensated (under one pixel:
+                                      # warping every image costs CPU time on the Orin Nano)
   devices:                            # first = reference device (rig frame timestamps)
     - name: cam2
       imu_topic: /cam2/imu            # gyroscope, needed for rotation_compensation

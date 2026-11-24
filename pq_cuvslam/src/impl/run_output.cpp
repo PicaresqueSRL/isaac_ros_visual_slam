@@ -253,7 +253,7 @@ void RunOutput::AddFrame(
   const std::optional<tf2::Transform> & slam_pose,
   double track_time_ms, size_t num_landmarks,
   const std::vector<size_t> & observations_per_camera, double callback_time_ms,
-  std::optional<double> sync_offset_ms)
+  std::optional<double> sync_offset_ms, std::optional<double> prep_time_ms)
 {
   if (tracked && odom_pose) {
     if (!odom_ref_) {
@@ -285,6 +285,8 @@ void RunOutput::AddFrame(
   row.push_back(FormatDouble(std::round(callback_time_ms * 1000.0) / 1000.0));
   if (sync_offset_column_) {
     row.push_back(sync_offset_ms ? FormatDouble(std::round(*sync_offset_ms * 1000.0) / 1000.0) :
+      "nan");
+    row.push_back(prep_time_ms ? FormatDouble(std::round(*prep_time_ms * 1000.0) / 1000.0) :
       "nan");
   }
   status_.push_back(std::move(row));
@@ -372,6 +374,7 @@ bool RunOutput::Write(const cuvslam::Slam * slam, JsonObject info)
   status_header.push_back("callback_time_ms");
   if (sync_offset_column_) {
     status_header.push_back("sync_offset_ms");
+    status_header.push_back("prep_time_ms");
   }
   ok &= WriteCsv(dir / "status.csv", status_header, status_);
   files.push_back("status.csv");

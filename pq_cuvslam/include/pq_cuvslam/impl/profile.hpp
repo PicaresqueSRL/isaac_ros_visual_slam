@@ -127,6 +127,9 @@ struct ProfileSync
   double max_offset_ms = 0.0;        // max capture time difference between paired frames
   bool rotation_compensation = false;
   int compensation_border_px = 0;    // image border excluded from tracking when compensating
+  // Rotations below this angle are not compensated (the image is not warped): 0.1 deg moves the
+  // image by less than one pixel, and warping costs CPU time on every image of the device.
+  double compensation_min_deg = 0.1;
   std::vector<ProfileSyncDevice> devices;  // first = reference device
 };
 

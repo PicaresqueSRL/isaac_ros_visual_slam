@@ -341,6 +341,24 @@ This file records every change made to it. Update it with each change.
   cameras 0.42 m (none rejected, most loop closures), RGB-D + IMU 0.71 m; IR + RGB + depth + IMU
   drops a third of the frames on the Orin Nano (CPU image preparation).
 
+### 2026-11-24
+
+**Heavier rigs on the Orin Nano: image preparation** (`PENDING`)
+- The software sync warps every image of cam1 to the capture time of cam2 (rotation
+  compensation) and the virtual cameras undistort and widen the RGB images, on the CPU, inside
+  the image callbacks (one mutually exclusive callback group): with IR stereo, RGB and depth of
+  both cameras the preparation alone took about the time of a frame, the image queues
+  overflowed and incomplete device frames were dropped.
+- `sync.compensation_min_deg` (default 0.1 deg, under one pixel): smaller rotations are not
+  warped (43 % of the images on walk_dual_3). `image_qos_depth: 20` in
+  `cam1_cam2_ir_rgb_depth_imu`. `prep_time_ms` in `status.csv` and the sync summary of
+  `run_info.json`.
+- Real time on the Jetson, walk_dual_3 with IR + RGB + depth + IMU: 2773 -> 3871 frames processed
+  of about 4200, incomplete device frames 1806 -> 309, start-end distance 1.08 -> 0.55 m.
+- Node parameter `rgb_to_mono` (default off): RGB converted to mono8 before the preparation;
+  cheaper, but the input differs from the conversion of cuVSLAM (loop_closure RGB-D: 1.19 m
+  start-end against 0.35 m).
+
 ## Notes
 
 - Isolated slow `track()` in VIO with cuVSLAM 16 and 17 (200-460 ms once per run, around frame

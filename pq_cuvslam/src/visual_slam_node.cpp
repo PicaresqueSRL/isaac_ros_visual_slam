@@ -115,6 +115,7 @@ void VisualSlamNode::DeclareAndReadParameters()
   border_mask_right_ = Param<int>("img_mask_right", 0);
   enable_image_denoising_ = Param<bool>("enable_image_denoising", false);
   rectified_images_ = Param<bool>("rectified_images", true);
+  rgb_to_mono_ = Param<bool>("rgb_to_mono", false);
   enable_ground_constraint_in_odometry_ =
     Param<bool>("enable_ground_constraint_in_odometry", false);
   enable_ground_constraint_in_slam_ = Param<bool>("enable_ground_constraint_in_slam", false);

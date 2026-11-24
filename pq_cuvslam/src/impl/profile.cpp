@@ -301,6 +301,9 @@ Profile LoadProfile(const std::string & path)
       s.rotation_compensation =
         r.As<bool>(sync["rotation_compensation"], "sync.rotation_compensation");
     }
+    if (sync["compensation_min_deg"]) {
+      s.compensation_min_deg = r.Number(sync, "compensation_min_deg", "sync.");
+    }
     if (sync["compensation_border_px"]) {
       s.compensation_border_px =
         r.As<int>(sync["compensation_border_px"], "sync.compensation_border_px");
