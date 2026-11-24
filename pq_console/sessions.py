@@ -195,7 +195,10 @@ class Sessions:
                   f'\nfor i in $(seq 30); do sleep 2; {off} && echo emitters off > /tmp/emitter.log '
                   '&& break; done\nwait')
         docker('rm', '-f', 'pq_cams')
+        # All GPU capabilities: without them the CUDA processing blocks of the Isaac ROS
+        # RealSense driver throw at every frame and the IR and RGB images are not published.
         code, out = docker('run', '-d', '--name', 'pq_cams', *self.c.gpu_args, '--privileged',
+                           '-e', 'NVIDIA_VISIBLE_DEVICES=all', '-e', 'NVIDIA_DRIVER_CAPABILITIES=all',
                            '-v', '/dev:/dev', *self.ros_args(), '--entrypoint', 'bash',
                            self.c.camera_image, '-c', script)
         if code:
