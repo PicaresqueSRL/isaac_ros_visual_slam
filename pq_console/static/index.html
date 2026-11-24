@@ -90,10 +90,10 @@
             <label class="small-text"><input type="checkbox" id="view-follow" checked> follow</label>
             <label class="small-text"><input type="checkbox" id="view-landmarks" checked> landmarks</label>
             <button id="view-fit" class="small secondary">Fit</button>
-            <button id="slam-reset" class="small secondary">Clear</button>
+            <button id="slam-reset" class="small secondary" title="Draw the SLAM again from the data of the console">Reload</button>
             <button id="slam-full" class="small secondary" title="Full screen (Esc to exit)">⛶ full screen</button>
           </h2>
-          <div id="slam3d"></div>
+          <div id="slam3d"><div id="slam3d-status" class="overlay"></div></div>
           <canvas id="traj" width="640" height="420" class="hidden"></canvas>
           <div id="legend" class="legend"></div>
         </div>

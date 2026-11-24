@@ -456,7 +456,12 @@ async function refreshSlam() {
     if (path.length) slam.since[topic] = path[path.length - 1][0];
   }
   const in3d = window.slam3d && window.slam3d.available;
-  if (in3d) window.slam3d.update(slam);
+  if (in3d) {
+    const j = state && state.job;
+    const points = Object.values(slam.paths).reduce((n, p) => n + p.length, 0);
+    const running = j && j.state === 'running' && j.kind === 'replay';
+    window.slam3d.update(slam, !points ? (running ? 'waiting for the SLAM…' : 'no SLAM data') : '');
+  }
   if (window.slam3d && !window.slam3d.available) {   // no WebGL: top view on a canvas
     $('slam3d').classList.add('hidden');
     $('traj').classList.remove('hidden');
@@ -478,7 +483,12 @@ function renderLegend() {
   if ((slam.loop_closures || []).length) items.push(`<span style="--c:#ffc800">loop closures · ${slam.loop_closures.length}</span>`);
   $('legend').innerHTML = items.join('');
 }
-$('slam-reset').onclick = () => post('slam/reset').then(refreshSlam);
+// Reload: draw the SLAM again from the data the console holds (the data is kept).
+$('slam-reset').onclick = () => {
+  slam = { generation: null, paths: {}, since: {}, landmarks: {} };
+  if (window.slam3d && window.slam3d.reset) window.slam3d.reset();
+  refreshSlam();
+};
 $('slam-full').onclick = () => {
   if (document.fullscreenElement) document.exitFullscreen();
   else $('slam-row').requestFullscreen().catch((e) => showError('full screen: ' + e.message));

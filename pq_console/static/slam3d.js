@@ -28,6 +28,9 @@ function init() {
   }
   renderer.setPixelRatio(window.devicePixelRatio);
   container.appendChild(renderer.domElement);
+  // The browser can drop the WebGL context (many views, GPU reset): draw again when it is back.
+  renderer.domElement.addEventListener('webglcontextlost', (e) => { e.preventDefault(); status('3D view lost by the browser: restoring…'); });
+  renderer.domElement.addEventListener('webglcontextrestored', () => { status(''); generation = null; });
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(50, 1, 0.05, 2000);
   scene.add(new THREE.AmbientLight(0xffffff, 1.0));
@@ -61,10 +64,17 @@ function animate() {
   renderer.render(scene, camera);
 }
 
+function status(text) {
+  const el = $('slam3d-status');
+  if (el.textContent !== text) el.textContent = text;
+}
+
+// Remove (and free) everything drawn: a new run, or a reload.
 function clear() {
-  for (const t of Object.values(tracks)) { scene.remove(t.line); scene.remove(t.marker); }
-  for (const c of Object.values(clouds)) scene.remove(c.points);
-  if (loops) scene.remove(loops);
+  const dispose = (o) => { scene.remove(o); if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); };
+  for (const t of Object.values(tracks)) { dispose(t.line); dispose(t.marker); }
+  for (const c of Object.values(clouds)) dispose(c.points);
+  if (loops) dispose(loops);
   tracks = {};
   clouds = {};
   loops = null;
@@ -175,8 +185,10 @@ function fit() {
 
 window.slam3d = {
   available: true,
-  update(slam) {
+  reset() { if (renderer) { clear(); generation = null; } },
+  update(slam, text) {
     if (!renderer && !init()) return;
+    status(text || '');
     if (slam.generation !== generation) { clear(); generation = slam.generation; }
     const before = lastPosition();
     Object.entries(slam.paths).forEach(([topic, pts], i) => {

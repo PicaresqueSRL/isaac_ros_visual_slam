@@ -154,3 +154,6 @@ button.round.playing .i-pause { display: inline; }
 #slam-row:fullscreen .card.wide { flex: 1 1 auto; display: flex; flex-direction: column; }
 #slam-row:fullscreen #slam3d { flex: 1; height: auto; }
 #slam-row:fullscreen > .card:last-child { flex: 0 0 300px; overflow: auto; }
+#slam3d .overlay { position: absolute; left: 8px; top: 6px; font-size: 12px; color: var(--muted);
+  background: var(--card); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; pointer-events: none; z-index: 1; }
+#slam3d .overlay:empty { display: none; }

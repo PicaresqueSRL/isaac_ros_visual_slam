@@ -450,7 +450,7 @@ class Sessions:
             else:
                 job.info(f'no run output: see {c.runs_dir}/{name}.log')
             if not save:   # test run: nothing kept
-                self.delete_run(name)
+                self.delete_run(name, own_job=True)
                 job.info('test run: output deleted')
                 job.meta['phase'] = 'done'
                 job.state = 'stopped' if job.stop_event.is_set() else 'done'
@@ -475,11 +475,11 @@ class Sessions:
         job.finished = time.time()
         job.info(job.state)
 
-    def delete_run(self, name):
+    def delete_run(self, name, own_job=False):
         """Everything of a run: output folder, log, SLAM bag, Rerun files."""
         if not bags_mod.safe_name(name) == name or not name:
             raise ValueError(f'invalid run name {name!r}')
-        if self.job and self.job.state == 'running' and self.job.name == name:
+        if not own_job and self.job and self.job.state == 'running' and self.job.name == name:
             raise ValueError(f'{name} is running')
         c = self.c
         paths = [os.path.join(c.runs_dir, name), os.path.join(c.runs_dir, f'{name}.log'),
