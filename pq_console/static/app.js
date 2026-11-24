@@ -448,7 +448,14 @@ async function refreshSlam() {
   const have = Object.fromEntries(Object.entries(slam.landmarks).map(([t, l]) => [t, l.number]));
   try { s = await get(q('/api/slam', { since: JSON.stringify(slam.since), landmarks: JSON.stringify(have) })); } catch (e) { return; }
   if (s.generation !== slam.generation) slam = { generation: s.generation, paths: {}, since: {}, landmarks: {} };
-  Object.assign(slam.landmarks, s.landmarks || {});
+  // Landmarks: int16 cell indices (x y z) in base64 -> positions (cell centres, metres).
+  for (const [topic, l] of Object.entries(s.landmarks || {})) {
+    const bytes = Uint8Array.from(atob(l.cells), (c) => c.charCodeAt(0));
+    const cells = new Int16Array(bytes.buffer);
+    const xyz = new Float32Array(cells.length);
+    for (let k = 0; k < cells.length; k++) xyz[k] = (cells[k] + 0.5) * l.cell;
+    slam.landmarks[topic] = { number: l.number, xyz };
+  }
   slam.loop_closures = s.loop_closures || [];
   for (const [topic, pts] of Object.entries(s.paths)) {
     const path = slam.paths[topic] || (slam.paths[topic] = []);
@@ -460,7 +467,9 @@ async function refreshSlam() {
     const j = state && state.job;
     const points = Object.values(slam.paths).reduce((n, p) => n + p.length, 0);
     const running = j && j.state === 'running' && j.kind === 'replay';
-    window.slam3d.update(slam, !points ? (running ? 'waiting for the SLAM…' : 'no SLAM data') : '');
+    const text = points ? '' : s.points ? `receiving the SLAM (${s.points} poses on the console)…`
+      : running ? 'waiting for the SLAM (it starts ~10 s after the bag)…' : 'no SLAM data';
+    window.slam3d.update(slam, text);
   }
   if (window.slam3d && !window.slam3d.available) {   // no WebGL: top view on a canvas
     $('slam3d').classList.add('hidden');
@@ -478,7 +487,7 @@ function renderLegend() {
     return `<span style="--c:${COLORS[i % COLORS.length]}">${esc(topic)} · ${len.toFixed(1)} m</span>`;
   });
   for (const [topic, l] of Object.entries(slam.landmarks)) {
-    items.push(`<span style="--c:#7c8796">${esc(topic.replace('/vis/landmarks_cloud', ''))} landmarks · ${l.xy.length / 3}</span>`);
+    items.push(`<span style="--c:#7c8796">${esc(topic.replace('/vis/landmarks_cloud', ''))} landmarks · ${l.xyz.length / 3}</span>`);
   }
   if ((slam.loop_closures || []).length) items.push(`<span style="--c:#ffc800">loop closures · ${slam.loop_closures.length}</span>`);
   $('legend').innerHTML = items.join('');
@@ -503,7 +512,7 @@ function drawTrajectory() {
   const W = cv.width, H = cv.height;
   ctx.clearRect(0, 0, W, H);
   const entries = Object.entries(slam.paths).filter(([, p]) => p.length);
-  const clouds = Object.entries(slam.landmarks).filter(([, l]) => l.xy.length);
+  const clouds = Object.entries(slam.landmarks).filter(([, l]) => l.xyz.length);
   const css = getComputedStyle(document.body);
   if (!entries.length && !clouds.length) {
     ctx.fillStyle = css.getPropertyValue('--muted');
@@ -517,7 +526,7 @@ function drawTrajectory() {
   let minx = Infinity, maxx = -Infinity, miny = Infinity, maxy = -Infinity;
   const grow = (x, y) => { minx = Math.min(minx, x); maxx = Math.max(maxx, x); miny = Math.min(miny, y); maxy = Math.max(maxy, y); };
   for (const [, p] of entries) for (const v of p) grow(v[1], v[2]);
-  if (!entries.length) for (const [, l] of clouds) for (let k = 0; k < l.xy.length; k += 3) grow(l.xy[k], l.xy[k + 1]);
+  if (!entries.length) for (const [, l] of clouds) for (let k = 0; k < l.xyz.length; k += 3) grow(l.xyz[k], l.xyz[k + 1]);
   const span = Math.max(maxx - minx, maxy - miny, 2) * 1.1;
   const scale = Math.min(W, H) / span;
   const cx = (minx + maxx) / 2, cy = (miny + maxy) / 2;
@@ -535,7 +544,7 @@ function drawTrajectory() {
   const dot = Math.max(1.5, 0.05 * scale);
   clouds.forEach(([topic, l], i) => {
     ctx.fillStyle = i ? 'rgba(59,130,246,0.35)' : 'rgba(100,116,139,0.45)';
-    for (let k = 0; k < l.xy.length; k += 3) ctx.fillRect(X(l.xy[k]) - dot / 2, Y(l.xy[k + 1]) - dot / 2, dot, dot);
+    for (let k = 0; k < l.xyz.length; k += 3) ctx.fillRect(X(l.xyz[k]) - dot / 2, Y(l.xyz[k + 1]) - dot / 2, dot, dot);
   });
   entries.forEach(([topic, p], i) => {
     const color = COLORS[i % COLORS.length];
@@ -870,10 +879,12 @@ $('graph-fit').onclick = () => cy && cy.fit(undefined, 20);
   const lastBag = linked || load('bag', '');
   if (lastBag) loadBag(lastBag);
   refreshTopics();
-  setInterval(refreshState, 1000);
+  // Each loop asks again only after the answer (no requests piling up behind an ssh tunnel).
+  const loop = (fn, ms, when = () => true) => { const run = async () => { if (when()) { try { await fn(); } catch (e) { /* next round */ } } setTimeout(run, ms); }; run(); };
+  loop(refreshState, 1000);
   setInterval(() => { if (tab === 'cameras') renderLivePreviews(); }, 1000);
   setInterval(() => { if (tab === 'cameras') refreshCameras(); }, 5000);
-  setInterval(() => { if (tab === 'bags') refreshSlam(); }, 250);
+  loop(refreshSlam, 250, () => tab === 'bags');
   framesLoop();
-  setInterval(refreshTopics, 2000);
+  loop(refreshTopics, 2000);
 })();

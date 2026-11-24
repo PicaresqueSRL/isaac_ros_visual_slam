@@ -26,6 +26,7 @@ Light by design, to run next to a recording on the Jetson:
   - the SLAM state comes from the odometry and diagnostics topics of pq_cuvslam (small messages).
 """
 
+import base64
 import collections
 import math
 import re
@@ -263,7 +264,7 @@ class Slam:
             self.paths = {}       # topic -> [[t, x, y, z], ...] subsampled
             self.last_point = {}
             self.diag = {}        # topic -> dict
-            self.landmarks = {}   # topic -> (number, [x0, y0, z0, x1, ...]) cells of a 3D grid
+            self.landmarks = {}   # topic -> (number, base64 of int16 x y z cell indices)
             self.events = collections.deque(maxlen=50)
             self.loop_closures = []   # [{topic, position}] of the whole run
             self.generation = time.time()
@@ -320,11 +321,14 @@ class Slam:
             xyz = np.stack([raw[:, offsets[k]:offsets[k] + 4].copy().view(np.float32)[:, 0]
                             for k in 'xyz'], axis=1)
             xyz = xyz[np.isfinite(xyz).all(axis=1)]
-        cells = np.unique(np.floor(xyz / LANDMARK_CELL_M).astype(np.int64), axis=0)[:LANDMARK_MAX]
-        flat = np.round((cells + 0.5) * LANDMARK_CELL_M, 2).reshape(-1).tolist()
+        cells = np.unique(np.floor(xyz / LANDMARK_CELL_M).astype(np.int64), axis=0)
+        # int16 cell indices (+-1600 m at 5 cm), little-endian, base64: about 8 bytes per point
+        # instead of 20-25 as JSON text (the page may be behind an ssh tunnel).
+        cells = cells[(np.abs(cells) < 32767).all(axis=1)][:LANDMARK_MAX]
+        packed = base64.b64encode(cells.astype('<i2').tobytes()).decode()
         with self.lock:
             number = self.landmarks.get(topic, (0, None))[0] + 1
-            self.landmarks[topic] = (number, flat)
+            self.landmarks[topic] = (number, packed)
 
     def state(self, since, have_landmarks):
         """Trajectory points after the given stamps, landmarks if changed (incremental polling)."""
@@ -333,9 +337,10 @@ class Slam:
             for topic, pts in self.paths.items():
                 after = since.get(topic, -1.0)
                 paths[topic] = [p for p in pts if p[0] > after] if after >= 0 else list(pts)
-            landmarks = {t: {'number': n, 'xy': xy} for t, (n, xy) in self.landmarks.items()
-                         if have_landmarks.get(t) != n}
+            landmarks = {t: {'number': n, 'cell': LANDMARK_CELL_M, 'cells': packed}
+                         for t, (n, packed) in self.landmarks.items() if have_landmarks.get(t) != n}
             return {'generation': self.generation, 'paths': paths, 'diagnostics': dict(self.diag),
+                    'points': sum(len(p) for p in self.paths.values()),
                     'events': list(self.events), 'landmarks': landmarks,
                     'loop_closures': list(self.loop_closures)}
 
@@ -490,7 +495,6 @@ class RosBridge(Node):
 
     def frames(self, topics, have):
         """Latest frame of each topic: {topic: {seq, info, jpeg (if newer than have)}}."""
-        import base64
         out = {}
         for topic, seen in zip(topics, have):
             try:

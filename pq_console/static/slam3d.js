@@ -124,7 +124,7 @@ function setCloud(topic, index, l) {
   if (old && old.number === l.number) return;
   if (old) scene.remove(old.points);
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(l.xy, 3));
+  geo.setAttribute('position', new THREE.BufferAttribute(l.xyz, 3));
   const mat = new THREE.PointsMaterial({ color: LANDMARK_COLORS[index % LANDMARK_COLORS.length], size: 0.05,
     sizeAttenuation: true, transparent: true, opacity: 0.8 });
   const points = new THREE.Points(geo, mat);
