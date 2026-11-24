@@ -29,6 +29,7 @@ Usage (inside the container, see run.sh): console.py --config config.yaml
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import math
 import mimetypes
 import os
 import threading
@@ -391,6 +392,17 @@ class Console:
         return {}
 
 
+def clean(obj):
+    """Non-finite floats to None, recursively."""
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: clean(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [clean(v) for v in obj]
+    return obj
+
+
 class Handler(BaseHTTPRequestHandler):
     console = None
     protocol_version = 'HTTP/1.1'
@@ -399,7 +411,8 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def send_json(self, obj, code=200):
-        data = json.dumps(obj).encode()
+        # NaN and infinity are not JSON: the browser would drop the whole answer.
+        data = json.dumps(clean(obj), allow_nan=False).encode()
         self.send_response(code)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(data)))

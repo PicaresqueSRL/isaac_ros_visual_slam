@@ -75,6 +75,11 @@ PARAM_TYPES = {ParameterType.PARAMETER_BOOL: 'bool', ParameterType.PARAMETER_INT
 PLAYER = '/rosbag2_player'
 
 
+def finite(x, digits=1):
+    """Rounded float, None for NaN or infinity (NaN is not valid JSON: the page drops the answer)."""
+    return round(float(x), digits) if math.isfinite(x) else None
+
+
 def param_value(v):
     """Python value of a ParameterValue."""
     return {ParameterType.PARAMETER_BOOL: lambda: v.bool_value,
@@ -291,10 +296,9 @@ class Slam:
                 'health': HEALTH_NAMES.get(d.health, str(d.health)), 'reasons': d.health_reasons,
                 'speed_mps': None if math.isnan(d.speed_mps) else round(d.speed_mps, 2),
                 'sync_offset_ms': None if math.isnan(d.sync_offset_ms) else round(d.sync_offset_ms, 1),
-                'streams': [{'name': s.name, 'saturated_pct': round(s.saturated_pct, 1),
-                             'mean': round(s.mean_intensity, 1),
-                             'valid_depth_pct': None if math.isnan(s.valid_depth_pct)
-                             else round(s.valid_depth_pct, 1)} for s in d.streams]}
+                'streams': [{'name': s.name, 'saturated_pct': finite(s.saturated_pct),
+                             'mean': finite(s.mean_intensity),
+                             'valid_depth_pct': finite(s.valid_depth_pct)} for s in d.streams]}
 
     def event(self, topic, e):
         with self.lock:
