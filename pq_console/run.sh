@@ -1,5 +1,6 @@
 #!/bin/bash
-# Starts pq_console in a container (detached; it keeps running when the ssh session ends).
+# Starts pq_console in a container (detached; it keeps running when the ssh session ends and
+# is restarted by Docker after a reboot, until run.sh stop).
 # The repository folder is mounted (not pq_console/): a git checkout that recreates
 # pq_console/ does not leave the container on a deleted folder.
 # The console drives the other containers through the Docker socket, with the docker client of
@@ -44,7 +45,7 @@ while read -r kind path; do
   esac
 done <<< "$MOUNTS"
 docker rm -f pq_console > /dev/null 2>&1 || true
-docker run -d --name pq_console --network host --ipc host \
+docker run -d --name pq_console --restart unless-stopped --network host --ipc host \
   -e ROS_DOMAIN_ID=${DOMAIN:-7} -e FASTDDS_BUILTIN_TRANSPORTS=${DDS:-LARGE_DATA} \
   -e HOST_UID=$(id -u) -e HOST_GID=$(id -g) \
   -v /var/run/docker.sock:/var/run/docker.sock -v "$(command -v docker)":/usr/bin/docker:ro \
