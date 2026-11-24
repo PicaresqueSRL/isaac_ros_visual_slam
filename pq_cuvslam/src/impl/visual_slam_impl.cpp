@@ -39,7 +39,9 @@
 #include "pq_cuvslam/impl/has_subscribers.hpp"
 #include "pq_cuvslam/impl/stopwatch.hpp"
 #include "pq_cuvslam/impl/types.hpp"
+#include "opencv2/imgproc.hpp"
 #include "pq_cuvslam/impl/visual_slam_impl.hpp"
+#include "sensor_msgs/image_encodings.hpp"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
 namespace
@@ -1051,6 +1053,7 @@ void VisualSlamNode::VisualSlamImpl::CallbackSyncImu(
 
 void VisualSlamNode::VisualSlamImpl::OnRigFrame(const DeviceSync::RigFrame & frame)
 {
+  const auto prep_start = std::chrono::steady_clock::now();
   // The rig frame takes the (uncorrected) stamp of the reference device.
   const int64_t stamp = frame.reference_stamp_ns + device_clock_offset_ns[0];
   double max_offset_ms = 0.0;
@@ -1064,7 +1067,7 @@ void VisualSlamNode::VisualSlamImpl::OnRigFrame(const DeviceSync::RigFrame & fra
   std::vector<std::pair<int, ImageType>> images;
   images.reserve(frame.images.size());
   for (const auto & [camera, raw] : frame.images) {
-    const ImageType msg = ToVirtual(camera, raw);
+    const ImageType msg = Prepare(camera, raw);
     const int d = camera_device[camera];
     if (d == 0) {
       images.emplace_back(camera, msg);
@@ -1079,9 +1082,14 @@ void VisualSlamNode::VisualSlamImpl::OnRigFrame(const DeviceSync::RigFrame & fra
         // A depth image is warped like the image of its camera.
         const int rig_camera = node.CameraOfStream(camera);
         const Eigen::Matrix3d dR = CameraRotation(camera_R_imu[rig_camera], *dR_imu);
-        H = RotationHomography(camera_K[rig_camera], dR);
-        sync_stats.rotations_deg.push_back(RotationAngleDeg(dR));
-        ++sync_stats.compensated_images;
+        const double angle = RotationAngleDeg(dR);
+        sync_stats.rotations_deg.push_back(angle);
+        if (angle >= node.profile_->sync->compensation_min_deg) {
+          H = RotationHomography(camera_K[rig_camera], dR);
+          ++sync_stats.compensated_images;
+        } else {
+          ++sync_stats.small_rotations;
+        }
       } else {
         ++sync_stats.gyro_missing;
       }
@@ -1097,24 +1105,56 @@ void VisualSlamNode::VisualSlamImpl::OnRigFrame(const DeviceSync::RigFrame & fra
     }
     images.emplace_back(camera, out);
   }
+  const double prep_ms = std::chrono::duration<double, std::milli>(
+    std::chrono::steady_clock::now() - prep_start).count();
+  sync_stats.prep_ms.push_back(prep_ms);
+  frame_prep_ms[stamp] = prep_ms;
   CallbackSynchronizedImages(stamp, images);
 }
 
 void VisualSlamNode::VisualSlamImpl::CallbackSynchronizedImages(
   int64_t latest_ts, const std::vector<std::pair<int, ImageType>> & idx_and_image_msgs)
 {
-  // Without device sync the images come straight from the synchronizer: convert the virtual
-  // cameras here (with device sync, OnRigFrame already did it).
-  if (!device_sync && !virtual_cameras.empty()) {
+  // Without device sync the images come straight from the synchronizer: prepare them here
+  // (with device sync, OnRigFrame already did it).
+  if (!device_sync) {
     std::vector<std::pair<int, ImageType>> images;
     images.reserve(idx_and_image_msgs.size());
     for (const auto & [idx, msg] : idx_and_image_msgs) {
-      images.emplace_back(idx, ToVirtual(idx, msg));
+      images.emplace_back(idx, Prepare(idx, msg));
     }
     sequencer.CallbackStream2(latest_ts, images);
     return;
   }
   sequencer.CallbackStream2(latest_ts, idx_and_image_msgs);
+}
+
+ImageType VisualSlamNode::VisualSlamImpl::Prepare(int index, const ImageType & image)
+{
+  // cuVSLAM tracks on intensity: an RGB image converted first is three times cheaper to
+  // undistort, warp and upload to the GPU.
+  namespace enc = sensor_msgs::image_encodings;
+  if (node.rgb_to_mono_ && index < static_cast<int>(node.num_cameras_) &&
+    (image->encoding == enc::RGB8 || image->encoding == enc::BGR8) &&
+    image->data.size() >= static_cast<size_t>(image->step) * image->height)
+  {
+    const cv::Mat src(
+      static_cast<int>(image->height), static_cast<int>(image->width), CV_8UC3,
+      const_cast<uint8_t *>(image->data.data()), image->step);
+    auto out = std::make_shared<sensor_msgs::msg::Image>();
+    out->header = image->header;
+    out->height = image->height;
+    out->width = image->width;
+    out->encoding = enc::MONO8;
+    out->is_bigendian = image->is_bigendian;
+    out->step = image->width;
+    out->data.resize(static_cast<size_t>(out->step) * out->height);
+    cv::Mat dst(static_cast<int>(out->height), static_cast<int>(out->width), CV_8UC1,
+      out->data.data(), out->step);
+    cv::cvtColor(src, dst, image->encoding == enc::RGB8 ? cv::COLOR_RGB2GRAY : cv::COLOR_BGR2GRAY);
+    return ToVirtual(index, out);
+  }
+  return ToVirtual(index, image);
 }
 
 ImageType VisualSlamNode::VisualSlamImpl::ToVirtual(int camera, const ImageType & image)
@@ -1873,12 +1913,17 @@ void VisualSlamNode::VisualSlamImpl::ReportFrame(
   }
 
   std::optional<double> sync_offset_ms;
+  std::optional<double> prep_ms;
   if (device_sync) {
     if (const auto it = frame_sync_offset_ms.find(timestamp_ns); it != frame_sync_offset_ms.end()) {
       sync_offset_ms = it->second;
     }
     frame_sync_offset_ms.erase(
       frame_sync_offset_ms.begin(), frame_sync_offset_ms.upper_bound(timestamp_ns));
+    if (const auto it = frame_prep_ms.find(timestamp_ns); it != frame_prep_ms.end()) {
+      prep_ms = it->second;
+    }
+    frame_prep_ms.erase(frame_prep_ms.begin(), frame_prep_ms.upper_bound(timestamp_ns));
   }
 
   // Events.
@@ -1973,7 +2018,7 @@ void VisualSlamNode::VisualSlamImpl::ReportFrame(
   if (run_output) {
     run_output->AddFrame(
       timestamp_ns, tracked, odom_pose, slam_pose, track_time_ms, num_landmarks, observations,
-      callback_time_ms, sync_offset_ms);
+      callback_time_ms, sync_offset_ms, prep_ms);
     if (metrics) {
       run_output->AddSlamMetrics(timestamp_ns, *metrics);
     }
@@ -2108,9 +2153,12 @@ void VisualSlamNode::VisualSlamImpl::WriteRunOutput()
     .Add("unmatched_reference_frames", st.unmatched_reference_frames)
     .Add("unused_device_frames", st.unused_device_frames)
     .Add("reused_device_frames", st.reused_device_frames)
-    .Add("offset_ms", summary(sync_stats.offsets_ms));
+    .Add("offset_ms", summary(sync_stats.offsets_ms))
+    .Add("prep_ms", summary(sync_stats.prep_ms));
     if (rotation_compensation) {
       sync.Add("compensated_images", sync_stats.compensated_images)
+      .Add("small_rotations_not_warped", sync_stats.small_rotations)
+      .Add("compensation_min_deg", node.profile_->sync->compensation_min_deg)
       .Add("images_without_gyroscope", sync_stats.gyro_missing)
       .Add("rotation_deg", summary(sync_stats.rotations_deg));
     }

@@ -102,6 +102,9 @@ hardware:
   ir_emitter: false
 
 parameters:
+  # 10 images per rig frame: a longer queue absorbs the bursts while a frame is prepared and
+  # tracked (Orin Nano, walk_dual_3: 3806 -> 3871 frames of about 4200).
+  image_qos_depth: 20
   rectified_images: false        # RGB not rectified with the IR: general 2D tracking
   enable_image_denoising: false
   image_jitter_threshold_ms: 150.0

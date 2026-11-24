@@ -212,6 +212,12 @@ private:
   // not already rectified.
   bool rectified_images_;
 
+  // RGB images converted to mono8 before the preparation (virtual camera, rotation
+  // compensation) and the upload to cuVSLAM: cheaper to prepare, but the input is not the same
+  // as the conversion of cuVSLAM (loop_closure, RGB-D: 1.19 m start-end against 0.35 m).
+  // Default off.
+  bool rgb_to_mono_;
+
   // If enabled, visual odometry poses will be modified such that the camera moves
   // on a horizontal plane.
   bool enable_ground_constraint_in_odometry_;

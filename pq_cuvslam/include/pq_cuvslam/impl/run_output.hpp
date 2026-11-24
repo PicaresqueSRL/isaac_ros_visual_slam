@@ -96,10 +96,12 @@ public:
     const std::optional<tf2::Transform> & slam_pose,
     double track_time_ms, size_t num_landmarks,
     const std::vector<size_t> & observations_per_camera, double callback_time_ms,
-    std::optional<double> sync_offset_ms = std::nullopt);
+    std::optional<double> sync_offset_ms = std::nullopt,
+    std::optional<double> prep_time_ms = std::nullopt);
 
-  // Adds the column sync_offset_ms to status.csv (capture time difference between the devices
-  // of the rig frame). Call before the first frame.
+  // Adds the columns sync_offset_ms (capture time difference between the devices of the rig
+  // frame) and prep_time_ms (image preparation of the rig frame) to status.csv. Call before the
+  // first frame.
   void EnableSyncOffsetColumn() {sync_offset_column_ = true;}
 
   void AddSlamMetrics(int64_t timestamp_ns, const cuvslam::Slam::Metrics & metrics);
