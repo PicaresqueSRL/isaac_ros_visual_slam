@@ -343,7 +343,7 @@ This file records every change made to it. Update it with each change.
 
 ### 2026-11-24
 
-**Heavier rigs on the Orin Nano: image preparation** (`PENDING`)
+**Heavier rigs on the Orin Nano: image preparation** (`3a52ea1`)
 - The software sync warps every image of cam1 to the capture time of cam2 (rotation
   compensation) and the virtual cameras undistort and widen the RGB images, on the CPU, inside
   the image callbacks (one mutually exclusive callback group): with IR stereo, RGB and depth of
