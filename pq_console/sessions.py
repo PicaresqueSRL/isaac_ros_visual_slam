@@ -629,12 +629,22 @@ class Sessions:
 
     def runs(self):
         out = []
+        names = set()
         for path in glob.glob(os.path.join(self.c.runs_dir, '*')):
             if os.path.isdir(path):
                 r = self.run_summary(path) or self.dual_summary(path)
                 if r:
                     r['size'] = self.run_size(r['name'])
                     out.append(r)
+                    names.add(r['name'])
+        # Runs without output (stopped before the first frame, or failed): only the log and the
+        # SLAM bag are left; listed so that they can be deleted.
+        for log in glob.glob(os.path.join(self.c.runs_dir, '*.log')):
+            name = os.path.basename(log)[:-len('.log')]
+            if name not in names:
+                out.append({'name': name, 'time': os.path.getmtime(log), 'mode': 'no output (see the log)',
+                            'health': {}, 'events': {}, 'rrd': '', 'size': self.run_size(name) +
+                            os.path.getsize(log)})
         return sorted(out, key=lambda r: r['time'], reverse=True)
 
     def disk(self):
