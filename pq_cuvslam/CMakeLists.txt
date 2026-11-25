@@ -157,6 +157,23 @@ if(CUVSLAM_USE_CUNLS AND CUVSLAM_VERSION_MAJOR LESS 17)
 endif()
 message(STATUS "cuVSLAM cuNLS: ${CUVSLAM_USE_CUNLS}")
 
+# CUDA architectures of the cuVSLAM kernels (e.g. 87 for the Orin Nano; empty: all the
+# architectures of the toolkit, the cuVSLAM default). cuVSLAM 15 always compiles for all of them.
+set(CUVSLAM_CUDA_ARCHITECTURES "" CACHE STRING
+  "CUDA architectures of the cuVSLAM kernels (empty: all)")
+set(_cuvslam_cuda_arch_args)
+set(_cuvslam_cuda_arch_used "all")
+if(CUVSLAM_CUDA_ARCHITECTURES)
+  if(CUVSLAM_VERSION_MAJOR LESS 16)
+    message(WARNING "cuVSLAM ${CUVSLAM_VERSION} ignores CUVSLAM_CUDA_ARCHITECTURES "
+      "(it compiles for all the architectures)")
+  else()
+    set(_cuvslam_cuda_arch_args "-DCMAKE_CUDA_ARCHITECTURES=${CUVSLAM_CUDA_ARCHITECTURES}")
+    set(_cuvslam_cuda_arch_used "${CUVSLAM_CUDA_ARCHITECTURES}")
+  endif()
+endif()
+message(STATUS "cuVSLAM CUDA architectures: ${_cuvslam_cuda_arch_used}")
+
 if(CMAKE_BUILD_TYPE)
   set(CUVSLAM_BUILD_TYPE "${CMAKE_BUILD_TYPE}")
 else()
@@ -185,6 +202,7 @@ externalproject_add(cuvslam_external
     -DUSE_RERUN=OFF
     -DUSE_CERES=OFF
     -DUSE_CUNLS=${CUVSLAM_USE_CUNLS}
+    ${_cuvslam_cuda_arch_args}
   BUILD_COMMAND ${CMAKE_COMMAND} -E env
     ${CUVSLAM_GIT_SAFE_DIR_ENV}
     ${CMAKE_COMMAND} --build <BINARY_DIR> --target cuvslam_api_launcher

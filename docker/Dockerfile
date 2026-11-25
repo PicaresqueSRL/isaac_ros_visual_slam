@@ -12,6 +12,7 @@
 #   PC (x86_64):  nvidia/cuda:13.1.1-devel-ubuntu24.04 (default)
 #   Jetson:       nvidia/cuda:13.2.0-devel-ubuntu24.04 (arm64, CUDA of JetPack 7.2), with
 #                 --build-arg CUDA_COMPAT=remove --build-arg BUILD_JOBS=2
+#                 --build-arg CUDA_ARCHITECTURES=87
 ARG BASE_IMAGE=nvidia/cuda:13.1.1-devel-ubuntu24.04
 
 FROM ${BASE_IMAGE}
@@ -89,10 +90,13 @@ RUN test -f src/isaac_ros_visual_slam/cuvslam/CMakeLists.txt \
 #   CUVSLAM_REF:     cuVSLAM git tag or commit to build (e.g. v17.0.1); empty: the submodule
 #   USE_CUNLS:       cuNLS solver in cuVSLAM (AUTO: on from cuVSLAM 17, off before)
 #   USE_CUDA_BUFFER: zero-copy images through Isaac ROS cuda_buffer (AUTO/ON/OFF)
+#   CUDA_ARCHITECTURES: CUDA architectures of the cuVSLAM kernels (e.g. 87 for the Orin Nano;
+#                    empty: all the architectures of the toolkit). Ignored by cuVSLAM 15.
 #   BUILD_TYPE:      CMake build type
 ARG CUVSLAM_REF=
 ARG USE_CUNLS=AUTO
 ARG USE_CUDA_BUFFER=AUTO
+ARG CUDA_ARCHITECTURES=
 ARG BUILD_TYPE=Release
 #   BUILD_JOBS:      parallel compile jobs (empty: all cores). On the Orin Nano (8 GB, no swap)
 #                    use 2-3: the CUDA kernels of cuVSLAM need a lot of memory per job.
@@ -112,7 +116,8 @@ RUN source /opt/ros/${ROS_DISTRO}/setup.bash \
             -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
             -DCUVSLAM_REF=${CUVSLAM_REF} \
             -DUSE_CUNLS=${USE_CUNLS} \
-            -DUSE_CUDA_BUFFER=${USE_CUDA_BUFFER}
+            -DUSE_CUDA_BUFFER=${USE_CUDA_BUFFER} \
+            -DCUVSLAM_CUDA_ARCHITECTURES=${CUDA_ARCHITECTURES}
 
 # CUDA forward compatibility libraries of the base image (cuda-compat-*). Not needed when the
 # host driver supports the CUDA version of the image. On Jetson (JetPack 7.2, NVIDIA Container
