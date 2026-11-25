@@ -30,8 +30,10 @@
 #ifndef PQ_CUVSLAM__IMPL__CUVSLAM_COMPAT_HPP_
 #define PQ_CUVSLAM__IMPL__CUVSLAM_COMPAT_HPP_
 
+#include <array>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -63,6 +65,18 @@ struct Features
   bool cunls = false;              // cuVSLAM built with cuNLS
   bool set_slam_pose = false;      // Slam::SetSlamPose (15)
   bool localizer_layers = false;   // localizer visualization layers (15)
+  bool imu_state = false;          // Odometry::GetImuState: velocity and IMU biases (17)
+};
+
+// State of the visual-inertial odometry after the last Track() (cuVSLAM >= 17).
+struct ImuState
+{
+  bool initialized = false;           // gravity estimated: visual-inertial initialization done
+  // Velocity in the world frame of the inertial solver (anchored to the keyframe where gravity
+  // was estimated, not the odometry frame): only its norm is used.
+  std::array<float, 3> velocity{};    // m/s
+  std::array<float, 3> gyro_bias{};   // rad/s, IMU frame
+  std::array<float, 3> acc_bias{};    // m/s^2, IMU frame
 };
 
 // Features of the cuVSLAM headers this node was compiled with.
@@ -81,6 +95,10 @@ cuvslam::PoseCovariance PoseCovarianceRotationFirst(const cuvslam::PoseWithCovar
 void SetMultisensorMode(
   cuvslam::Odometry::Config & config, const std::vector<int32_t> & depth_camera_ids,
   float depth_scale_factor, bool enable_depth_stereo_tracking);
+
+// IMU state of the odometry; empty before cuVSLAM 17, without IMU fusion, or before the first
+// tracked frame.
+std::optional<ImuState> GetImuState(const cuvslam::Odometry & odometry);
 
 // Adds an odometry state to SLAM and returns the SLAM pose.
 cuvslam::Pose SlamTrack(cuvslam::Slam & slam, const cuvslam::Odometry::State & state);

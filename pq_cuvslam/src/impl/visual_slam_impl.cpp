@@ -214,6 +214,7 @@ VisualSlamNode::VisualSlamImpl::VisualSlamImpl(VisualSlamNode & vslam_node)
   health_config.max_speed_mps = node.health_max_speed_mps_;
   health_config.max_gyro_error_deg = node.health_max_gyro_error_deg_;
   health_config.min_landmarks = node.health_min_landmarks_;
+  health_config.max_vio_mismatch_mps = node.health_max_vio_mismatch_mps_;
   health_config.reset_bad_frames = node.health_reset_bad_frames_;
   health = TrackingHealth(health_config);
 
@@ -546,10 +547,20 @@ void VisualSlamNode::VisualSlamImpl::Initialize()
       }
       health_gyro_ready = true;
     }
+    char vio_check[48] = "not available";
+    if (node.UsesImu() && compat::CompiledFeatures().imu_state) {
+      if (node.health_max_vio_mismatch_mps_ > 0.0) {
+        std::snprintf(
+          vio_check, sizeof(vio_check), "max %.1f m/s", node.health_max_vio_mismatch_mps_);
+      } else {
+        std::snprintf(vio_check, sizeof(vio_check), "off");
+      }
+    }
     RCLCPP_INFO(
       node.get_logger(), "Odometry health check: max %.1f m/s, max %.1f deg against the gyroscope "
-      "(%s), min %d landmarks", node.health_max_speed_mps_, node.health_max_gyro_error_deg_,
-      health_gyro_ready ? gyro_frame.c_str() : "no gyroscope", node.health_min_landmarks_);
+      "(%s), min %d landmarks, VIO speed against the odometry: %s", node.health_max_speed_mps_,
+      node.health_max_gyro_error_deg_, health_gyro_ready ? gyro_frame.c_str() : "no gyroscope",
+      node.health_min_landmarks_, vio_check);
   }
 
   // Create the IMU configuration. If the IMU is disabled we just use the identity transform.
@@ -605,6 +616,7 @@ void VisualSlamNode::VisualSlamImpl::Initialize()
 
 bool VisualSlamNode::VisualSlamImpl::CreateTrackers(const cuvslam::Rig & rig)
 {
+  vio_initialized = false;
   // Create cuvslam odometry tracker.
   const cuvslam::Odometry::Config configuration = CreateOdometryConfiguration();
   PrintConfiguration(node.get_logger(), configuration);
@@ -1317,6 +1329,11 @@ void VisualSlamNode::VisualSlamImpl::UpdatePose(
     }
   }
   bool vo_success = vo_pose_estimate.world_from_rig != std::nullopt;
+  // Velocity and IMU biases of the visual-inertial odometry (cuVSLAM >= 17).
+  std::optional<compat::ImuState> imu_state;
+  if (vo_success && node.UsesImu()) {
+    imu_state = compat::GetImuState(*cuvslam_odometry);
+  }
 
   if (!vo_success) {
     pose_cache.Reset();
@@ -1549,6 +1566,12 @@ void VisualSlamNode::VisualSlamImpl::UpdatePose(
       health_in.gyro_rotation = tf2::Quaternion(q.x(), q.y(), q.z(), q.w());
     }
   }
+  if (imu_state && imu_state->initialized) {
+    const auto & v = imu_state->velocity;
+    health_in.vio_speed_mps = std::sqrt(
+      static_cast<double>(v[0]) * v[0] + static_cast<double>(v[1]) * v[1] +
+      static_cast<double>(v[2]) * v[2]);
+  }
   health_last_stamp_ns = latest_ts;
   const HealthOutput health_out = health.Update(health_in);
   if (health_out.guarded_pose && HasSubscribers(node.tracking_odometry_guarded_pub_)) {
@@ -1564,7 +1587,7 @@ void VisualSlamNode::VisualSlamImpl::UpdatePose(
     track_execution_time * 1000.0,
     std::chrono::duration<double, std::milli>(
       std::chrono::steady_clock::now() - callback_start).count(),
-    idx_and_image_msgs, health_out);
+    idx_and_image_msgs, health_out, imu_state);
 
   if (health_out.reset_tracker) {
     ResetTracker(
@@ -1847,7 +1870,8 @@ void VisualSlamNode::VisualSlamImpl::PublishEvent(
     {SlamEventType::TRACKER_INITIALIZED, "tracker_initialized"},
     {SlamEventType::POSE_REJECTED, "pose_rejected"},
     {SlamEventType::POSE_ACCEPTED, "pose_accepted"},
-    {SlamEventType::TRACKER_RESET, "tracker_reset"}};
+    {SlamEventType::TRACKER_RESET, "tracker_reset"},
+    {SlamEventType::VIO_INITIALIZED, "vio_initialized"}};
   const auto name_it = kNames.find(type);
   const std::string name = name_it != kNames.end() ? name_it->second : std::to_string(type);
   if (node.events_pub_) {
@@ -1872,7 +1896,7 @@ void VisualSlamNode::VisualSlamImpl::ReportFrame(
   int64_t timestamp_ns, bool tracked, const std::optional<tf2::Transform> & odom_pose,
   const std::optional<tf2::Transform> & slam_pose, double track_time_ms,
   double callback_time_ms, const std::vector<std::pair<int, ImageType>> & images,
-  const HealthOutput & health_out)
+  const HealthOutput & health_out, const std::optional<compat::ImuState> & imu_state)
 {
   const bool publish_diagnostics = node.enable_frame_diagnostics_ &&
     HasSubscribers(node.frame_diagnostics_pub_);
@@ -1940,6 +1964,20 @@ void VisualSlamNode::VisualSlamImpl::ReportFrame(
       "loop closure, " + std::to_string(metrics->lc_good_landmarks_count) + " landmarks");
   }
   last_loop_closure = loop_closure;
+  const float vio_speed = imu_state ?
+    std::sqrt(
+    imu_state->velocity[0] * imu_state->velocity[0] +
+    imu_state->velocity[1] * imu_state->velocity[1] +
+    imu_state->velocity[2] * imu_state->velocity[2]) :
+    std::numeric_limits<float>::quiet_NaN();
+  if (imu_state && imu_state->initialized && !vio_initialized) {
+    char text[160];
+    std::snprintf(
+      text, sizeof(text), "visual-inertial initialization done (Track() %.0f ms, VIO speed "
+      "%.2f m/s)", track_time_ms, vio_speed);
+    PublishEvent(SlamEventType::VIO_INITIALIZED, timestamp_ns, text);
+    vio_initialized = true;
+  }
   if (health_out.state == HealthState::REJECTED) {
     if (health_last_state != HealthState::REJECTED) {
       char text[128];
@@ -1998,6 +2036,16 @@ void VisualSlamNode::VisualSlamImpl::ReportFrame(
     d.health_reasons = HealthReasons(health_out.reasons);
     d.speed_mps = static_cast<float>(health_out.speed_mps);
     d.gyro_error_deg = static_cast<float>(health_out.gyro_error_deg);
+    d.imu_state_valid = imu_state.has_value();
+    d.vio_initialized = imu_state && imu_state->initialized;
+    d.vio_speed_mps = vio_speed;
+    d.vio_mismatch_mps = static_cast<float>(health_out.vio_mismatch_mps);
+    for (size_t i = 0; i < 3; ++i) {
+      d.gyro_bias[i] = imu_state ? imu_state->gyro_bias[i] :
+        std::numeric_limits<float>::quiet_NaN();
+      d.acc_bias[i] = imu_state ? imu_state->acc_bias[i] :
+        std::numeric_limits<float>::quiet_NaN();
+    }
     for (const auto & [idx, st] : stats) {
       StreamStatsType ss;
       ss.name = input_image_names[idx].first;
@@ -2026,6 +2074,9 @@ void VisualSlamNode::VisualSlamImpl::ReportFrame(
       run_output->AddStreamStats(timestamp_ns, input_image_names[idx].first, st);
     }
     run_output->AddHealth(timestamp_ns, health_out);
+    if (imu_state) {
+      run_output->AddImuState(timestamp_ns, *imu_state);
+    }
   }
 }
 

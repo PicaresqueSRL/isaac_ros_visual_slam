@@ -131,4 +131,32 @@ TEST(TrackingHealth, ResetAfterRepeatedBadFrames)
   EXPECT_FALSE(again);
 }
 
+TEST(TrackingHealth, VioSpeedAgainstOdometry)
+{
+  pq::visual_slam::HealthConfig config;
+  config.max_vio_mismatch_mps = 1.0;
+  TrackingHealth h(config);
+  HealthInput in;
+  for (int i = 0; i < 15; ++i) {
+    in = Frame(i, At(0.02 * i));   // 0.6 m/s
+    in.vio_speed_mps = 0.7;
+    const auto out = h.Update(in);
+    EXPECT_EQ(out.state, HealthState::OK);
+    if (i >= 3) {
+      EXPECT_NEAR(out.vio_mismatch_mps, 0.1, 1e-6);
+    }
+  }
+  // The inertial state drifts away from the visual motion: degraded, pose still accepted.
+  in = Frame(15, At(0.30));
+  in.vio_speed_mps = 2.5;
+  auto out = h.Update(in);
+  EXPECT_EQ(out.state, HealthState::DEGRADED);
+  EXPECT_EQ(pq::visual_slam::HealthReasons(out.reasons), "vio");
+  EXPECT_NEAR(out.guarded_pose->getOrigin().x(), 0.30, 1e-9);
+  // Without VIO state (not initialized, or cuVSLAM < 17): no check.
+  out = h.Update(Frame(16, At(0.32)));
+  EXPECT_EQ(out.state, HealthState::OK);
+  EXPECT_TRUE(std::isnan(out.vio_mismatch_mps));
+}
+
 }  // namespace

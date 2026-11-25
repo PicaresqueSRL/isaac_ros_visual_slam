@@ -38,6 +38,7 @@ Benchmark and analysis tools: `../tools/`.
 | `health_max_speed_mps` | `3.0` | odometry increments faster than this are rejected (guarded odometry) |
 | `health_max_gyro_error_deg` | `5.0` | increments whose rotation differs from the gyroscope by more are rejected |
 | `health_min_landmarks` | `10` | fewer landmarks: health degraded |
+| `health_max_vio_mismatch_mps` | `0.0` (off) | VIO with cuVSLAM >= 17: speed estimated by the VIO above the median speed of the accepted increments of the last 0.5 s by more than this (e.g. `1.0`): health degraded, reason `vio`. The mismatch is always computed (`vio_mismatch_mps`) |
 | `health_reset_bad_frames` | `8` | reset of the tracker after this many rejected or lost frames within 1 s, at most every 2 s (0: never); the SLAM map is lost, the guarded odometry continues |
 
 ## Topics
@@ -47,9 +48,9 @@ The Isaac ROS topics are unchanged (`visual_slam/tracking/odometry`, `vo_path`, 
 
 | Topic | Type | Content |
 |---|---|---|
-| `visual_slam/diagnostics/frame` | `pq_cuvslam_interfaces/FrameDiagnostics` | per frame: mode, profile, tracked, Track() and callback time, latency (live), sync offset, observations per camera, landmarks, loop closure, statistics of every input image (`StreamStats`: brightness, saturated and dark pixels, valid depth), health of the odometry (ok, degraded, rejected, lost; speed, rotation error against the gyroscope) |
+| `visual_slam/diagnostics/frame` | `pq_cuvslam_interfaces/FrameDiagnostics` | per frame: mode, profile, tracked, Track() and callback time, latency (live), sync offset, observations per camera, landmarks, loop closure, statistics of every input image (`StreamStats`: brightness, saturated and dark pixels, valid depth), health of the odometry (ok, degraded, rejected, lost; speed, rotation error against the gyroscope), state of the VIO with cuVSLAM >= 17 (initialized, estimated speed and its mismatch with the odometry, gyroscope and accelerometer biases) |
 | `visual_slam/tracking/odometry_guarded` | `nav_msgs/Odometry` | odometry with the rejected increments removed: for a rejected or lost frame the position is kept and the rotation of the gyroscope applied (no jump is carried into the trajectory) |
-| `visual_slam/events` | `pq_cuvslam_interfaces/SlamEvent` | configured, tracker initialized, tracking lost / recovered, loop closure, odometry rejected / accepted again, tracker reset (reliable, transient local) |
+| `visual_slam/events` | `pq_cuvslam_interfaces/SlamEvent` | configured, tracker initialized, tracking lost / recovered, loop closure, odometry rejected / accepted again, tracker reset, visual-inertial initialization done (reliable, transient local) |
 
 With `run_output_dir` the same information is written to `status.csv`, `streams.csv`,
 `events.csv`, `health.csv`, `odometry_guarded.csv` and summarized in `run_info.json`.

@@ -59,6 +59,7 @@ def launch_setup(context):
                 'enable_slam_visualization': enable_vis,
                 'enable_landmarks_view': enable_vis,
                 'enable_observations_view': enable_vis,
+                'health_max_vio_mismatch_mps': float(arg('health_max_vio_mismatch_mps')),
             }],
         ))
     nodes.append(ComposableNode(
@@ -98,6 +99,9 @@ def generate_launch_description():
         DeclareLaunchArgument('cam2_profile', default_value='cam2_stereo_imu'),
         DeclareLaunchArgument('primary', default_value='cam1'),
         DeclareLaunchArgument('run_output_dir', default_value=''),
+        # VIO speed against the odometry (cuVSLAM >= 17): above this, degraded frames that make
+        # the selector switch (e.g. 1.0); 0 disables the check.
+        DeclareLaunchArgument('health_max_vio_mismatch_mps', default_value='0.0'),
         DeclareLaunchArgument('enable_vis', default_value='false'),
         DeclareLaunchArgument('bag', default_value=''),
         DeclareLaunchArgument('rate', default_value='1.0'),

@@ -332,13 +332,39 @@ void RunOutput::AddEvent(
   ++event_counts_[type];
 }
 
+void RunOutput::AddImuState(int64_t timestamp_ns, const compat::ImuState & st)
+{
+  const auto num = [](double v) {
+      return std::isfinite(v) ? FormatDouble(std::round(v * 1e6) / 1e6) : std::string("nan");
+    };
+  double speed2 = 0.0;
+  for (float v : st.velocity) {
+    speed2 += static_cast<double>(v) * v;
+  }
+  const double speed = std::sqrt(speed2);
+  Row row{FormatDouble(timestamp_ns / 1e9), st.initialized ? "1" : "0", num(speed)};
+  for (const auto & v : {st.gyro_bias, st.acc_bias}) {
+    for (float x : v) {
+      row.push_back(num(x));
+    }
+  }
+  imu_state_.push_back(std::move(row));
+  if (st.initialized) {
+    if (!vio_initialized_s_) {
+      vio_initialized_s_ = timestamp_ns / 1e9;
+    }
+    vio_speed_max_ = std::max(vio_speed_max_, speed);
+  }
+}
+
 void RunOutput::AddHealth(int64_t timestamp_ns, const HealthOutput & h)
 {
   const auto num = [](double v) {
       return std::isfinite(v) ? FormatDouble(std::round(v * 1000.0) / 1000.0) : std::string("nan");
     };
   health_.push_back({FormatDouble(timestamp_ns / 1e9), HealthStateName(h.state),
-      HealthReasons(h.reasons), num(h.speed_mps), num(h.gyro_error_deg)});
+      HealthReasons(h.reasons), num(h.speed_mps), num(h.gyro_error_deg),
+      num(h.vio_mismatch_mps)});
   ++health_counts_[HealthStateName(h.state)];
   if (h.guarded_pose) {
     if (!guarded_ref_) {
@@ -479,7 +505,8 @@ bool RunOutput::Write(const cuvslam::Slam * slam, JsonObject info)
   }
   if (!health_.empty()) {
     ok &= WriteCsv(
-      dir / "health.csv", {"timestamp", "state", "reasons", "speed_mps", "gyro_error_deg"},
+      dir / "health.csv",
+      {"timestamp", "state", "reasons", "speed_mps", "gyro_error_deg", "vio_mismatch_mps"},
       health_);
     files.push_back("health.csv");
     ok &= WriteCsv(dir / "odometry_guarded.csv", kPoseHeader, odometry_guarded_);
@@ -490,6 +517,21 @@ bool RunOutput::Write(const cuvslam::Slam * slam, JsonObject info)
     }
     summary.Add("health", health);
     summary.Add("odometry_guarded", PathStats(guarded_stamps_, guarded_positions_));
+  }
+  if (!imu_state_.empty()) {
+    ok &= WriteCsv(
+      dir / "imu_state.csv",
+      {"timestamp", "initialized", "vio_speed_mps", "gyro_bias_x", "gyro_bias_y", "gyro_bias_z",
+        "acc_bias_x", "acc_bias_y", "acc_bias_z"},
+      imu_state_);
+    files.push_back("imu_state.csv");
+    JsonObject imu;
+    imu.Add("initialized", vio_initialized_s_.has_value());
+    if (vio_initialized_s_) {
+      imu.Add("initialized_at", *vio_initialized_s_);
+      imu.Add("vio_speed_max_mps", vio_speed_max_);
+    }
+    summary.Add("vio", imu);
   }
   ok &= WriteCsv(dir / "events.csv", {"timestamp", "type", "description"}, events_);
   files.push_back("events.csv");

@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace pq
 {
@@ -56,6 +57,7 @@ std::string HealthReasons(uint32_t reasons)
   if (reasons & kHealthGyro) {add("gyro");}
   if (reasons & kHealthFewLandmarks) {add("few_landmarks");}
   if (reasons & kHealthLost) {add("lost");}
+  if (reasons & kHealthVio) {add("vio");}
   return out;
 }
 
@@ -125,6 +127,29 @@ HealthOutput TrackingHealth::Update(const HealthInput & in)
       out.state = HealthState::DEGRADED;
       out.reasons |= kHealthFewLandmarks;
     }
+    accepted_speeds_.emplace_back(in.stamp_ns, out.speed_mps);
+  }
+  const auto window_ns = static_cast<int64_t>(config_.vio_window_s * 1e9);
+  while (!accepted_speeds_.empty() && accepted_speeds_.front().first < in.stamp_ns - window_ns) {
+    accepted_speeds_.pop_front();
+  }
+  // At least 3 accepted increments in the window, for a stable median.
+  if (in.vio_speed_mps && accepted_speeds_.size() >= 3) {
+    std::vector<double> speeds;
+    for (const auto & [stamp, speed] : accepted_speeds_) {
+      speeds.push_back(speed);
+    }
+    const auto mid = speeds.begin() + speeds.size() / 2;
+    std::nth_element(speeds.begin(), mid, speeds.end());
+    out.vio_mismatch_mps = *in.vio_speed_mps - *mid;
+    if (config_.max_vio_mismatch_mps > 0.0 &&
+      out.vio_mismatch_mps > config_.max_vio_mismatch_mps)
+    {
+      out.reasons |= kHealthVio;
+      if (out.state == HealthState::OK) {
+        out.state = HealthState::DEGRADED;
+      }
+    }
   }
   out.guarded_pose = guarded_;
   return Finish(out, in.stamp_ns, out.state == HealthState::REJECTED);
@@ -152,6 +177,7 @@ void TrackingHealth::OnTrackerReset(int64_t stamp_ns)
   last_raw_.reset();
   gyro_since_raw_.reset();
   bad_stamps_ns_.clear();
+  accepted_speeds_.clear();
   consecutive_bad_ = 0;
   last_reset_ns_ = stamp_ns;
 }
