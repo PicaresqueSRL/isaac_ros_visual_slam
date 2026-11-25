@@ -16,7 +16,7 @@ slam_extra_args: []              # more docker run arguments of the SLAM contain
 # cuVSLAM builds selectable for the SLAM (first = default); empty: slam_image / install_dir
 # cuvslam_versions:
 #   "17.0.1": {image: pq_cuvslam:dev}
-#   "15.0.0": {image: pq_cuvslam:v15}
+#   "15.0.0": {image: pq_cuvslam:cuvslam15}   # built with --build-arg CUVSLAM_REF=v15.0.0
 tools_dir: /home/user/workspaces/pq_cuvslam/isaac_ros_visual_slam/tools   # Rerun conversion
 pylib_dir: /home/user/workspaces/pq_cuvslam/pylib   # rerun-sdk (tools/rerun_layout.py); empty: no .rrd
 dual_cam1_profile: cam1_stereo_imu

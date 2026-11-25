@@ -63,7 +63,7 @@ LANDMARK_CELL_M = 0.05       # 3D grid of the landmarks sent to the page
 LANDMARK_MAX = 60000
 EVENT_NAMES = {1: 'tracking lost', 2: 'tracking recovered', 3: 'loop closure', 4: 'configured',
                5: 'tracker initialized', 6: 'pose rejected', 7: 'pose accepted',
-               8: 'tracker reset', 9: 'camera switch'}
+               8: 'tracker reset', 9: 'camera switch', 10: 'VIO initialized'}
 HEALTH_NAMES = {0: 'ok', 1: 'degraded', 2: 'rejected', 3: 'lost'}
 PARAM_TYPES = {ParameterType.PARAMETER_BOOL: 'bool', ParameterType.PARAMETER_INTEGER: 'integer',
                ParameterType.PARAMETER_DOUBLE: 'double', ParameterType.PARAMETER_STRING: 'string',
@@ -296,6 +296,11 @@ class Slam:
                 'health': HEALTH_NAMES.get(d.health, str(d.health)), 'reasons': d.health_reasons,
                 'speed_mps': None if math.isnan(d.speed_mps) else round(d.speed_mps, 2),
                 'sync_offset_ms': None if math.isnan(d.sync_offset_ms) else round(d.sync_offset_ms, 1),
+                # State of the VIO (cuVSLAM >= 17 with IMU fusion).
+                'vio': {'initialized': d.vio_initialized,
+                        'speed_mps': finite(d.vio_speed_mps, 2),
+                        'mismatch_mps': finite(d.vio_mismatch_mps, 2)}
+                if getattr(d, 'imu_state_valid', False) else None,
                 'streams': [{'name': s.name, 'saturated_pct': finite(s.saturated_pct),
                              'mean': finite(s.mean_intensity),
                              'valid_depth_pct': finite(s.valid_depth_pct)} for s in d.streams]}

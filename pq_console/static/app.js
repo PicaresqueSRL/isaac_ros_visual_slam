@@ -577,6 +577,7 @@ function renderDiag(s) {
         <dt>observations</dt><dd>${esc(obs)}</dd>
         <dt>track()</dt><dd>${d.track_ms} ms</dd>
         ${d.speed_mps != null ? `<dt>speed</dt><dd>${d.speed_mps} m/s</dd>` : ''}
+        ${d.vio ? `<dt>VIO</dt><dd>${d.vio.initialized ? chip('initialized', 'ok') : chip('not initialized', 'warn')}${d.vio.speed_mps != null ? ` ${d.vio.speed_mps} m/s` : ''}${d.vio.mismatch_mps != null ? `, ${d.vio.mismatch_mps > 0 ? '+' : ''}${d.vio.mismatch_mps} m/s against the odometry` : ''}</dd>` : ''}
         ${d.sync_offset_ms != null ? `<dt>sync offset</dt><dd>${d.sync_offset_ms} ms</dd>` : ''}
         ${sat ? `<dt>saturated</dt><dd>${esc(sat)}</dd>` : ''}</dl>`;
     }).join('');
