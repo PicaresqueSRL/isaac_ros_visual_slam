@@ -15,7 +15,7 @@ This file records every change made to it. Update it with each change.
 | Topics, services, TF | `/visual_slam/...`, `map -> odom -> base` | unchanged |
 | Isaac ROS dependencies | `isaac_ros_common`, `isaac_common`, `cuda_buffer` | none required; `cuda_buffer` optional |
 | Image transfer | zero-copy GPU (`cuda_buffer`) | GPU with `cuda_buffer`, host memory without (`USE_CUDA_BUFFER`) |
-| cuVSLAM version | 15.0 only (checked at startup) | 15, 16, 17 chosen at build time (`CUVSLAM_REF`), API differences in `impl/cuvslam_compat` |
+| cuVSLAM version | 15.0 only (checked at startup) | 15, 16, 17 chosen at build time (`CUVSLAM_REF`; default the submodule, 17.0.1), API differences in `impl/cuvslam_compat` |
 | cuNLS | `USE_CUNLS=OFF` fixed | `USE_CUNLS=AUTO`: on from cuVSLAM 17 |
 | Node type | `rclcpp::Node` | lifecycle node (`configure`/`activate`/`deactivate`/`cleanup`), `autostart` |
 | Startup errors | `exit()` / "no CUDA-capable device" | `configure` fails with an explicit message (version, modes, GPU) |
@@ -25,7 +25,7 @@ This file records every change made to it. Update it with each change.
 | Latency emulation | none | `latency_profile` / `emulated_latency_ms`: frames take as long as on the target platform |
 | Diagnostics | `visual_slam/status`, `/diagnostics` | also `visual_slam/diagnostics/frame` (per-frame times, observations, stream saturation, valid depth) and `visual_slam/events` (`pq_cuvslam_interfaces`) |
 | IMU queue | SENSOR_DATA depth (5) | 400 messages (`imu_qos_depth`): no IMU samples lost in real time |
-| Odometry health | none | per-frame check (speed, rotation against the gyroscope, landmarks) and `visual_slam/tracking/odometry_guarded` without the rejected increments |
+| Odometry health | none | per-frame check (speed, rotation against the gyroscope, landmarks; VIO speed against the odometry with cuVSLAM 17) and `visual_slam/tracking/odometry_guarded` without the rejected increments |
 | Cameras | one tracker per node | `dual_vio.launch.py`: VIO of cam1 and cam2 in parallel and an odometry selector (`visual_slam/tracking/odometry_fused`) |
 | Run output | topics only | also CSV + `run_info.json` (`run_output_dir`), format of `run_output.py` |
 | Build | Isaac ROS container | `docker/Dockerfile` (ROS 2 Lyrical, Ubuntu 24.04, CUDA 13) |
@@ -370,6 +370,42 @@ This file records every change made to it. Update it with each change.
 - Node parameter `rgb_to_mono` (default off): RGB converted to mono8 before the preparation;
   cheaper, but the input differs from the conversion of cuVSLAM (loop_closure RGB-D: 1.19 m
   start-end against 0.35 m).
+
+### 2026-11-25
+
+**cuVSLAM 17.0.1 by default** (`fb55862`)
+- Submodule `cuvslam` at `v17.0.1` (`51631ba`), the version used on the Jetson: the default
+  build is cuVSLAM 17 with cuNLS. cuVSLAM 15 (the version of the Isaac ROS node, for the parity
+  test) with `CUVSLAM_REF=v15.0.0`.
+- CMake option `CUVSLAM_CUDA_ARCHITECTURES` / Docker argument `CUDA_ARCHITECTURES` (e.g. `87`
+  for the Orin Nano): CUDA architectures of the cuVSLAM kernels, forwarded as
+  `CMAKE_CUDA_ARCHITECTURES` (honoured from cuVSLAM 16; 15 always compiles for all of them,
+  `-arch=all`). Empty: all the architectures of the toolkit, as before.
+- PC image with the default build: 18 minutes for the workspace (cuVSLAM 17 with cuNLS, all
+  architectures).
+
+**State of the visual-inertial odometry (cuVSLAM >= 17)** (`7102896`)
+- `compat::GetImuState`: `Odometry::GetImuState()` of cuVSLAM 17 (velocity, gyroscope and
+  accelerometer biases) and whether the visual-inertial initialization is done (gravity
+  estimated). Empty before 17 and without IMU fusion.
+- `FrameDiagnostics`: `imu_state_valid`, `vio_initialized`, `vio_speed_mps`,
+  `vio_mismatch_mps`, `gyro_bias`, `acc_bias`. Event `VIO_INITIALIZED` (with the time of that
+  `Track()`, the isolated slow call of the Notes). Run output: `imu_state.csv`, `vio` in the
+  summary of `run_info.json` (initialized, when, maximum VIO speed), `vio_mismatch_mps` in
+  `health.csv`.
+- Health check: `vio_mismatch_mps` = VIO speed - median speed of the accepted increments of the
+  last 0.5 s. With `health_max_vio_mismatch_mps` > 0 a larger mismatch makes the frame degraded
+  (reason `vio`, pose accepted), which the odometry selector counts as bad. Default 0 (off):
+  computed and recorded, not acted on. Argument of `dual_vio.launch.py` too.
+- Offline, 15 bags, VIO of cam1 and cam2: on the clean bags the mismatch exceeds 1 m/s in < 1 %
+  of the frames (isolated), on the difficult ones in 5-40 %; it precedes about half of the runs
+  of rejected frames, by 1.5 s (median). The VIO never initializes on `low_detail_2`,
+  `low_detail_3`, `cars_106` (both cameras) and `loop_closure_2` (cam2).
+- `dual_vio` in real time on the PC, 10 bags, check off / on (1.0 m/s): fused trajectory better on
+  `elevator_down_107` (gyro RMS 1.08 -> 0.96 deg, start-end 4.5 -> 2.5 m) and
+  `internal_corridor_104` (0.96 -> 0.81 deg), worse on `elevator_up_103` (0.72 -> 0.84 deg),
+  equal elsewhere; the single VIOs, unaffected by the check, vary by up to 20 % between the two
+  runs, so the difference is within the run-to-run variation. Hence off by default.
 
 ## Notes
 
