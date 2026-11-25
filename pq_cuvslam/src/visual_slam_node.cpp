@@ -204,6 +204,8 @@ void VisualSlamNode::DeclareAndReadParameters()
   health_max_speed_mps_ = Param<double>("health_max_speed_mps", 3.0);
   health_max_gyro_error_deg_ = Param<double>("health_max_gyro_error_deg", 5.0);
   health_min_landmarks_ = Param<int>("health_min_landmarks", 10);
+  // VIO speed above the odometry speed by more than this: degraded (0: off; cuVSLAM >= 17).
+  health_max_vio_mismatch_mps_ = Param<double>("health_max_vio_mismatch_mps", 0.0);
   // Reset of the tracker after this many rejected or lost frames within 1 s (0: never).
   health_reset_bad_frames_ = Param<int>("health_reset_bad_frames", 8);
   diagnostics_pixel_stride_ = Param<int>("diagnostics_pixel_stride", 4);
@@ -247,10 +249,11 @@ void VisualSlamNode::CheckSetup()
   const compat::Features features = compat::CompiledFeatures();
   RCLCPP_INFO(
     get_logger(), "cuVSLAM version: %s (features: mono %s, multisensor %s, cuNLS %s, "
-    "SetSlamPose %s, localizer visualization %s)", std::string(cuvslam_version).c_str(),
+    "SetSlamPose %s, localizer visualization %s, VIO state %s)",
+    std::string(cuvslam_version).c_str(),
     features.mono ? "yes" : "no", features.multisensor ? "yes" : "no",
     features.cunls ? "yes" : "no", features.set_slam_pose ? "yes" : "no",
-    features.localizer_layers ? "yes" : "no");
+    features.localizer_layers ? "yes" : "no", features.imu_state ? "yes" : "no");
   if (const std::string error = compat::CheckRuntimeVersion(); !error.empty()) {
     throw std::runtime_error(error);
   }

@@ -165,7 +165,7 @@ struct VisualSlamNode::VisualSlamImpl
     int64_t timestamp_ns, bool tracked, const std::optional<tf2::Transform> & odom_pose,
     const std::optional<tf2::Transform> & slam_pose, double track_time_ms,
     double callback_time_ms, const std::vector<std::pair<int, ImageType>> & images,
-    const HealthOutput & health);
+    const HealthOutput & health, const std::optional<compat::ImuState> & imu_state);
 
   // Publishes an event, logs it and adds it to the run output.
   void PublishEvent(uint8_t type, int64_t stamp_ns, const std::string & description);
@@ -234,6 +234,8 @@ struct VisualSlamNode::VisualSlamImpl
   // Input image as given to cuVSLAM: RGB to mono8 (rgb_to_mono), then the virtual camera.
   ImageType Prepare(int index, const ImageType & image);
   bool last_loop_closure = false;
+  // Visual-inertial initialization of the current tracker done (VIO_INITIALIZED event sent).
+  bool vio_initialized = false;
 
   // Sequencer used to sequence imu and image messages.
   using Sequencer = MessageStreamSequencer<ImuType::ConstSharedPtr,

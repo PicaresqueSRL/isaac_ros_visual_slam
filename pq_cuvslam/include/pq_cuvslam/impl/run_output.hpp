@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "cuvslam/cuvslam2.h"
+#include "pq_cuvslam/impl/cuvslam_compat.hpp"
 #include "pq_cuvslam/impl/image_stats.hpp"
 #include "pq_cuvslam/impl/tracking_health.hpp"
 #include "tf2/LinearMath/Transform.hpp"
@@ -78,6 +79,9 @@ private:
 //   events.csv         events: tracking lost / recovered, loop closures, ...
 //   health.csv         per frame: health state, reasons, speed, rotation error against the gyro
 //   odometry_guarded.csv  guarded odometry (rejected increments removed), as odometry.csv
+//   imu_state.csv      per tracked frame with IMU fusion (cuVSLAM >= 17): visual-inertial
+//                      initialization done, speed estimated by the VIO, gyroscope and
+//                      accelerometer biases (IMU frame)
 //   run_info.json      input, parameters, versions, frame counts and summary metrics
 //
 // Pose columns: timestamp,x,y,z,qx,qy,qz,qw,roll_deg,pitch_deg,yaw_deg. Timestamps in seconds.
@@ -109,6 +113,7 @@ public:
   void AddStreamStats(int64_t timestamp_ns, const std::string & stream, const ImageStats & stats);
   void AddEvent(int64_t timestamp_ns, const std::string & type, const std::string & description);
   void AddHealth(int64_t timestamp_ns, const HealthOutput & health);
+  void AddImuState(int64_t timestamp_ns, const compat::ImuState & state);
 
   // Writes all files. slam may be null (SLAM disabled). info is extended with the summary
   // and the list of files. Returns false if the folder cannot be written.
@@ -135,6 +140,9 @@ private:
   std::vector<Row> events_;
   std::vector<Row> health_;
   std::vector<Row> odometry_guarded_;
+  std::vector<Row> imu_state_;
+  std::optional<double> vio_initialized_s_;  // stamp of the first initialized frame
+  double vio_speed_max_ = 0.0;                // after the initialization
   std::optional<tf2::Transform> guarded_ref_;
   std::vector<tf2::Vector3> guarded_positions_;
   std::vector<int64_t> guarded_stamps_;

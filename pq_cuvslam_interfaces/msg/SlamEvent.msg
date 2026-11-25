@@ -9,6 +9,7 @@ uint8 POSE_REJECTED = 6   # first of a run of rejected odometry increments (reas
 uint8 POSE_ACCEPTED = 7   # increments accepted again (number of rejected frames in description)
 uint8 TRACKER_RESET = 8   # tracker recreated after repeated rejected or lost frames (reason in description)
 uint8 CAMERA_SWITCH = 9   # odometry selector: another tracker selected (odometry_selector_node)
+uint8 VIO_INITIALIZED = 10  # visual-inertial initialization done: gravity estimated (cuVSLAM >= 17)
 
 std_msgs/Header header   # stamp of the frame (CONFIGURED: node clock)
 uint8 type

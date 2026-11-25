@@ -427,6 +427,7 @@ private:
   double health_max_speed_mps_;
   double health_max_gyro_error_deg_;
   int health_min_landmarks_;
+  double health_max_vio_mismatch_mps_;
   int health_reset_bad_frames_;
   int diagnostics_pixel_stride_;
 

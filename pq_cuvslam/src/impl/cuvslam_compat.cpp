@@ -33,6 +33,7 @@ Features CompiledFeatures()
   f.multisensor = PQ_CUVSLAM_VERSION_MAJOR >= 17 && f.cunls;
   f.set_slam_pose = PQ_CUVSLAM_VERSION_MAJOR < 16;
   f.localizer_layers = PQ_CUVSLAM_HAS_LOCALIZER_LAYERS;
+  f.imu_state = PQ_CUVSLAM_VERSION_MAJOR >= 17;
   return f;
 }
 
@@ -84,6 +85,32 @@ void SetMultisensorMode(
   throw std::invalid_argument(
           "Multisensor odometry needs cuVSLAM >= 17 (this build: " +
           std::to_string(PQ_CUVSLAM_VERSION_MAJOR) + ")");
+#endif
+}
+
+std::optional<ImuState> GetImuState(const cuvslam::Odometry & odometry)
+{
+#if PQ_CUVSLAM_VERSION_MAJOR >= 17
+  std::optional<cuvslam::Odometry::ImuState> s;
+  try {
+    s = odometry.GetImuState();
+  } catch (const std::invalid_argument &) {
+    return std::nullopt;  // IMU fusion disabled
+  }
+  if (!s) {
+    return std::nullopt;
+  }
+  ImuState out;
+  for (size_t i = 0; i < 3; ++i) {
+    out.velocity[i] = s->velocity[i];
+    out.gyro_bias[i] = s->gyro_bias[i];
+    out.acc_bias[i] = s->acc_bias[i];
+  }
+  out.initialized = odometry.GetLastGravity().has_value();
+  return out;
+#else
+  (void)odometry;
+  return std::nullopt;
 #endif
 }
 
