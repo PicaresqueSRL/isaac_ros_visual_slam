@@ -1,0 +1,111 @@
+# One SLAM with both D455 (cam2 forward, cam1 down), cuVSLAM Multisensor mode (cuVSLAM >= 17
+# with cuNLS, experimental). Every stream of both cameras: IR stereo, RGB,
+# depth and the cam2 IMU (6 images and 2 depth images per frame). The depth goes with IR1, which
+# it is natively aligned with (no alignment needed). Multisensor needs all the cameras at the
+# same resolution: the 640x480 RGB is undistorted and widened to 848x480 with empty side bands
+# (excluded from the feature search).
+name: cam1_cam2_ir_rgb_depth_imu
+description: cam2 and cam1 IR stereo, RGB and depth with the cam2 IMU, one multisensor odometry
+mode: multisensor
+base_frame: cam2_link
+
+cameras:
+  - name: cam2_ir1
+    device: cam2
+    image_topic: /cam2/infra1/image_rect_raw
+    camera_info_topic: /cam2/infra1/camera_info
+    optical_frame: cam2_infra1_optical_frame
+  - name: cam2_ir2
+    device: cam2
+    image_topic: /cam2/infra2/image_rect_raw
+    camera_info_topic: /cam2/infra2/camera_info
+    optical_frame: cam2_infra2_optical_frame
+  - name: cam2_rgb
+    device: cam2
+    image_topic: /cam2/color/image_raw
+    camera_info_topic: /cam2/color/camera_info
+    optical_frame: cam2_color_optical_frame
+    undistort: true
+    pad_left: 104
+    pad_right: 104
+  - name: cam1_ir1
+    device: cam1
+    image_topic: /cam1/infra1/image_rect_raw
+    camera_info_topic: /cam1/infra1/camera_info
+    optical_frame: cam1_infra1_optical_frame
+  - name: cam1_ir2
+    device: cam1
+    image_topic: /cam1/infra2/image_rect_raw
+    camera_info_topic: /cam1/infra2/camera_info
+    optical_frame: cam1_infra2_optical_frame
+  - name: cam1_rgb
+    device: cam1
+    image_topic: /cam1/color/image_raw
+    camera_info_topic: /cam1/color/camera_info
+    optical_frame: cam1_color_optical_frame
+    undistort: true
+    pad_left: 104
+    pad_right: 104
+
+depth:
+  - topic: /cam2/depth/image_rect_raw
+    camera_index: 0
+    scale: 1000.0                  # D455 depth in millimeters
+    stereo_tracking: true          # 2D tracks between the depth camera and the others
+  - topic: /cam1/depth/image_rect_raw
+    camera_index: 3
+    scale: 1000.0                  # D455 depth in millimeters
+    stereo_tracking: true          # 2D tracks between the depth camera and the others
+
+imu:
+  topic: /cam2/imu
+  frame: cam2_gyro_optical_frame
+  noise:
+    gyro_noise_density: 0.000244
+    gyro_random_walk: 0.000019393
+    accel_noise_density: 0.001862
+    accel_random_walk: 0.003
+    frequency: 200.0
+    source: default
+    date: null
+
+# Same extrinsics and software sync as cam1_cam2_ir.
+extrinsics:
+  - parent: cam2_link
+    child: cam1_link
+    translation: [-0.0134, 0.0, -0.0634]   # m
+    rotation_rpy: [0.0, 0.8604, 0.0]       # rad (pitch +49.3 deg)
+    source: >-
+      translation from the holder CAD (D455_HOLDER.stp); pitch estimated from the two
+      gyroscopes on the 17 bags
+    date: null
+
+# The images of one D455 (IR1, IR2, RGB, depth) share the capture time; the two D455 are paired
+# by the software sync (nearest frame, rotation compensation with the cam1 gyroscope, also for
+# the cam1 depth).
+sync:
+  mode: software
+  max_offset_ms: 34.0
+  rotation_compensation: true
+  compensation_border_px: 16
+  devices:
+    - name: cam2
+      imu_topic: /cam2/imu
+      imu_frame: cam2_gyro_optical_frame
+      clock_offset_ms: 0.0
+    - name: cam1
+      imu_topic: /cam1/imu
+      imu_frame: cam1_gyro_optical_frame
+      clock_offset_ms: 0.0
+
+hardware:
+  ir_emitter: false
+
+parameters:
+  # 10 images per rig frame: a longer queue absorbs the bursts while a frame is prepared and
+  # tracked (Orin Nano, walk_dual_3: 3806 -> 3871 frames of about 4200).
+  image_qos_depth: 20
+  rectified_images: false        # RGB not rectified with the IR: general 2D tracking
+  enable_image_denoising: false
+  image_jitter_threshold_ms: 150.0
+  enable_localization_n_mapping: true

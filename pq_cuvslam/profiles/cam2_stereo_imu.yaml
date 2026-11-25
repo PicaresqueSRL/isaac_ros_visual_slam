@@ -1,0 +1,41 @@
+# cam2 IR stereo + cam2 IMU: configuration of the benchmark.
+# Same node parameters as the Isaac ROS 5 reference runs (cuvslam_stereo_imu_cam2*.launch.py).
+name: cam2_stereo_imu
+description: cam2 (forward) infrared stereo pair with the cam2 IMU, visual-inertial odometry
+mode: inertial
+base_frame: cam2_link
+
+# Order = cuVSLAM camera index; a stereo pair is left, right.
+cameras:
+  - name: cam2_ir1
+    image_topic: /cam2/infra1/image_rect_raw
+    camera_info_topic: /cam2/infra1/camera_info
+    optical_frame: cam2_infra1_optical_frame
+  - name: cam2_ir2
+    image_topic: /cam2/infra2/image_rect_raw
+    camera_info_topic: /cam2/infra2/camera_info
+    # The D455 camera_info of IR2 carries the IR1 frame: the frame is set here.
+    optical_frame: cam2_infra2_optical_frame
+
+imu:
+  topic: /cam2/imu
+  frame: cam2_gyro_optical_frame
+  noise:
+    gyro_noise_density: 0.000244      # rad/s/sqrt(Hz)
+    gyro_random_walk: 0.000019393     # rad/s^2/sqrt(Hz)
+    accel_noise_density: 0.001862     # m/s^2/sqrt(Hz)
+    accel_random_walk: 0.003          # m/s^3/sqrt(Hz)
+    frequency: 200.0                  # Hz
+    source: default                   # Isaac ROS defaults, not measured on our IMUs
+    date: null
+
+hardware:
+  ir_emitter: false
+
+parameters:
+  rectified_images: true
+  enable_image_denoising: false
+  image_jitter_threshold_ms: 150.0
+  enable_localization_n_mapping: true
+  enable_ground_constraint_in_odometry: false
+  enable_ground_constraint_in_slam: false

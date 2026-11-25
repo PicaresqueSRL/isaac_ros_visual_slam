@@ -1,0 +1,9 @@
+# Keep the build context small. .git is kept: cuVSLAM and the run metadata
+# read the commit hashes from it.
+build/
+install/
+log/
+**/__pycache__/
+.vscode/
+*.db3
+*.mcap

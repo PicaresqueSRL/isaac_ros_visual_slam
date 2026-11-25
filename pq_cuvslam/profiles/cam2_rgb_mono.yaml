@@ -1,0 +1,20 @@
+# cam2 RGB only, monocular odometry (trajectory up to scale).
+name: cam2_rgb_mono
+description: cam2 (forward) RGB camera, monocular odometry, no metric scale
+mode: mono
+base_frame: cam2_link
+
+cameras:
+  - name: cam2_rgb
+    image_topic: /cam2/color/image_raw
+    camera_info_topic: /cam2/color/camera_info
+    optical_frame: cam2_color_optical_frame
+
+hardware:
+  ir_emitter: false
+
+parameters:
+  rectified_images: false        # the D455 RGB stream is distorted (plumb_bob)
+  enable_image_denoising: false
+  image_jitter_threshold_ms: 150.0
+  enable_localization_n_mapping: true
