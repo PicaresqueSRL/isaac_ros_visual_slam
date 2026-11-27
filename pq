@@ -22,6 +22,7 @@ Setup
                              --tag <image>    image name (default IMAGE of pq.conf)
                              --all-gpus       kernels for every NVIDIA GPU (PC; slower build)
                              --jobs <n>       parallel compile jobs
+                             --no-cache       rebuild every step (no Docker cache)
   profiles                   list the camera profiles
 
 Live (cameras connected)
@@ -116,13 +117,14 @@ stamp() { date +%Y%m%d_%H%M%S; }
 
 # ---------------------------------------------------------------------------------------------
 cmd_setup() {
-  local ref="" tag="" all_gpus=0 jobs=""
+  local ref="" tag="" all_gpus=0 jobs="" nocache=()
   while [ $# -gt 0 ]; do
     case $1 in
       --cuvslam) ref=${2:?}; shift ;;
       --tag) tag=${2:?}; shift ;;
       --all-gpus) all_gpus=1 ;;
       --jobs) jobs=${2:?}; shift ;;
+      --no-cache) nocache=(--no-cache) ;;
       *) die "setup: unknown option $1" ;;
     esac
     shift
@@ -167,7 +169,7 @@ cmd_setup() {
     args+=(--build-arg "BUILD_JOBS=${jobs:-$(( n > 0 ? n : 1 ))}")
   fi
   info "building $tag (first time: about 20 min on a PC, 30-45 min on the Orin Nano)"
-  docker build -f "$REPO/docker/Dockerfile" -t "$tag" "${args[@]}" "$REPO"
+  docker build "${nocache[@]}" -f "$REPO/docker/Dockerfile" -t "$tag" "${args[@]}" "$REPO"
   mkdir -p "$DATA_DIR"/{bags,runs,rerun,bench}
   docker run --rm "${GPU[@]}" "$tag" bash -c \
     'python3 -c "import sys" && ls /ws/install/pq_cuvslam/lib/pq_cuvslam > /dev/null' \

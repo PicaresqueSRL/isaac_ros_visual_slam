@@ -40,7 +40,7 @@ cd isaac_ros_visual_slam
 
 `./pq setup` detects the platform (PC or Jetson) and uses the right build options. The first
 build takes about 20 minutes on a PC and 30-45 minutes on the Orin Nano. Run it again after a
-`git pull`. Other cuVSLAM versions: `./pq setup --cuvslam v15.0.0 --tag pq_cuvslam:cuvslam15`
+`git pull` (`--no-cache` rebuilds every step from scratch). Other cuVSLAM versions: `./pq setup --cuvslam v15.0.0 --tag pq_cuvslam:cuvslam15`
 (then `IMAGE=pq_cuvslam:cuvslam15` in `pq.conf`).
 
 Local settings (data folder, camera serial numbers) are in `pq.conf`. It is created from
