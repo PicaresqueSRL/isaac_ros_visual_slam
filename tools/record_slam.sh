@@ -18,7 +18,10 @@
 # Replays one bag with pq_cuvslam and records the SLAM output to MCAP.
 # Runs in the pq_cuvslam container (ROS 2 and the workspace sourced).
 #
-# Usage: record_slam.sh <bag> <out dir> <profile> [rate] [image topics]
+# Usage: record_slam.sh <bag> <out dir> <profile | dual> [rate] [image topics]
+#
+# dual: the VIO of cam1 and cam2 with the odometry selector (dual_vio.launch.py), real time
+# only; the bag is played with ros2 bag play. Run output in run/cam1, run/cam2, run/fused.
 #
 # Default: real-time replay (rate 1, processing_mode realtime: frames dropped when the tracker
 # is late, bundle adjustment and SLAM in background threads), i.e. what the node gives online.
@@ -56,6 +59,16 @@ RECORD_TOPICS=(
   /visual_slam/status
   /tf /tf_static
 )
+RECORD_REGEX='^/visual_slam/vis/.*'
+if [ "$PROFILE" = dual ]; then
+  if [ "$MODE" = offline ]; then
+    echo "dual runs in real time only" >&2
+    exit 2
+  fi
+  # Topics of both VIO namespaces and the fused odometry of the selector.
+  RECORD_TOPICS=(/tf /tf_static)
+  RECORD_REGEX='^(/cam[12]_vio)?/visual_slam/.*'
+fi
 
 rm -rf "$OUT"
 mkdir -p "$OUT"
@@ -63,7 +76,7 @@ NAME=$(basename "${BAG%/}")
 
 # The recorder runs in its own process group so that it can be stopped cleanly.
 setsid ros2 bag record -s mcap -o "$OUT/bag" --topics "${RECORD_TOPICS[@]}" \
-  --regex '^/visual_slam/vis/.*' > "$OUT/record.log" 2>&1 < /dev/null &
+  --regex "$RECORD_REGEX" > "$OUT/record.log" 2>&1 < /dev/null &
 RECORD_PID=$!
 sleep 3
 if ! kill -0 "$RECORD_PID" 2>/dev/null; then
@@ -71,10 +84,28 @@ if ! kill -0 "$RECORD_PID" 2>/dev/null; then
   exit 1
 fi
 
-ros2 launch pq_cuvslam slam.launch.py profile:="$PROFILE" bag:="$BAG" rate:="$RATE" \
-  processing_mode:="$MODE" enable_vis:=true run_output_dir:="$OUT/run" \
-  > "$OUT/replay.log" 2>&1 < /dev/null
-RC=$?
+if [ "$PROFILE" = dual ]; then
+  setsid ros2 launch pq_cuvslam dual_vio.launch.py enable_vis:=true run_output_dir:="$OUT/run" \
+    > "$OUT/replay.log" 2>&1 < /dev/null &
+  LAUNCH_PID=$!
+  sleep 8   # nodes active before the first frame
+  ros2 bag play "$BAG" --rate "$RATE" > "$OUT/play.log" 2>&1 < /dev/null
+  RC=$?
+  sleep 3
+  kill -INT -- -"$LAUNCH_PID" 2>/dev/null
+  for i in $(seq 60); do
+    kill -0 "$LAUNCH_PID" 2>/dev/null || break
+    sleep 0.5
+  done
+  kill -KILL -- -"$LAUNCH_PID" 2>/dev/null
+  RUN_INFO=$OUT/run/cam2/run_info.json
+else
+  ros2 launch pq_cuvslam slam.launch.py profile:="$PROFILE" bag:="$BAG" rate:="$RATE" \
+    processing_mode:="$MODE" enable_vis:=true run_output_dir:="$OUT/run" \
+    > "$OUT/replay.log" 2>&1 < /dev/null
+  RC=$?
+  RUN_INFO=$OUT/run/run_info.json
+fi
 
 # Let the recorder receive the last messages, then stop it. Background processes of a script
 # ignore SIGINT, so SIGTERM follows; SIGKILL only as last resort (the MCAP would not be closed).
@@ -87,7 +118,7 @@ for i in $(seq 60); do
 done
 kill -KILL -- -"$RECORD_PID" 2>/dev/null
 
-if [ $RC -ne 0 ] || [ ! -f "$OUT/run/run_info.json" ]; then
+if [ $RC -ne 0 ] || [ ! -f "$RUN_INFO" ]; then
   echo "[$NAME] ERROR: replay failed, see $OUT/replay.log" >&2
   exit 1
 fi

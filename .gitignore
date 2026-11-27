@@ -1,3 +1,7 @@
 # Ignore all pycache files
 **/__pycache__/**
 .vscode
+
+# Local configuration of ./pq and the optional web app checkout
+pq.conf
+.pq_console/

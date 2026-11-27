@@ -7,6 +7,9 @@ diagnostics. All changes from Isaac ROS are listed in `../CHANGES.md`.
 
 ## Run
 
+The simplest way is the `pq` command at the repository root (`./pq replay <bag>`, `./pq slam`,
+see `../README.md`). Inside the container (`./pq shell`):
+
 ```bash
 # Live (topics of the profile), as a composable node with autostart.
 ros2 launch pq_cuvslam slam.launch.py profile:=cam2_stereo_imu

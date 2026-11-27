@@ -1,8 +1,11 @@
 # Docker
 
 One Dockerfile for desktop PC and Jetson. It installs ROS 2 Lyrical on
-Ubuntu 24.04 and builds the workspace (`pq_cuvslam`, the interfaces and
-cuVSLAM from the `cuvslam` submodule) with colcon.
+Ubuntu 24.04 and the RealSense driver, and builds the workspace (`pq_cuvslam`, the interfaces
+and cuVSLAM from the `cuvslam` submodule) with colcon.
+
+`./pq setup` (repository root) runs this build with the right options for the platform; this
+page is the reference of the options, for building by hand.
 
 ## Build
 
@@ -22,6 +25,7 @@ Build arguments:
 | `USE_CUNLS` | `AUTO` | cuNLS solver: `AUTO` = on from cuVSLAM 17 (needed by Multisensor), off before (not supported there, and off in the Isaac ROS node). |
 | `USE_CUDA_BUFFER` | `AUTO` | Zero-copy images through Isaac ROS `cuda_buffer`, enabled if the package is installed. Not installed by this image, so images go to cuVSLAM in host memory. |
 | `CUDA_ARCHITECTURES` | (empty: all) | CUDA architectures of the cuVSLAM kernels, e.g. `87` (Orin Nano) or `89` (RTX 40xx): faster build, image valid only for those GPUs. Empty: all the architectures of the toolkit (any NVIDIA GPU). Ignored by cuVSLAM 15, which always compiles for all of them. |
+| `WITH_REALSENSE` | `true` | RealSense driver `realsense2_camera` (live cameras, `./pq cams`). `false`: bag replay only. |
 | `BUILD_TYPE` | `Release` | CMake build type. |
 | `BUILD_JOBS` | (empty: all cores) | Parallel compile jobs. Orin Nano (8 GB, no swap): `2` (peak about 4.5 GB in use while compiling the CUDA kernels). |
 | `CUDA_COMPAT` | `keep` | `remove`: purge the CUDA forward compatibility packages of the base image. Required on Jetson: with them the cuda-compat hook of the NVIDIA Container Toolkit 1.19.1 crashes and no container starts. |

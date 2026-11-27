@@ -1,0 +1,33 @@
+# Local configuration of ./pq. `./pq setup` copies this file to pq.conf (not tracked by git:
+# camera serial numbers and local paths stay on this machine). Shell syntax.
+
+# Data folder: bags/ (recordings), runs/ (SLAM output), rerun/ (files for the Rerun viewer),
+# bench/ (benchmarks).
+DATA_DIR=$HOME/pq_data
+
+# More recorded bags, read only (replay and benchmark find bags here too). Empty: DATA_DIR/bags.
+BAGS_DIR=
+
+# RealSense serial numbers of the two D455 (label serial, `./pq cams list`). cam1 looks at the
+# floor, cam2 forward.
+CAM1_SERIAL=
+CAM2_SERIAL=
+
+# Image built by `./pq setup`, used for the SLAM, the tools and (by default) the cameras.
+IMAGE=pq_cuvslam:dev
+
+# Image of the RealSense driver, recorder and player. Empty: IMAGE (realsense2_camera from the
+# Isaac ROS buildfarm). Alternative on the Jetson: the Isaac ROS realsense image,
+# nvcr.io/nvidia/isaac/ros:isaac_ros-realsense_<tag>-arm64-jetpack
+CAMERA_IMAGE=
+
+# Camera streams: IR and depth 848x480, RGB 640x480, 30 fps, IMU united at 200 Hz, no
+# pointcloud and no depth alignment (CPU). The IR emitter is switched off after the start.
+CAMERA_PARAMS="enable_color:=true enable_depth:=true enable_infra1:=true enable_infra2:=true
+  enable_accel:=true enable_gyro:=true unite_imu_method:=2 gyro_fps:=200 accel_fps:=100
+  pointcloud.enable:=false align_depth.enable:=false
+  depth_module.depth_profile:=848x480x30 depth_module.infra_profile:=848x480x30
+  rgb_camera.color_profile:=640x480x30"
+
+# ROS 2 domain of the cameras and of the live SLAM. Replays run isolated (no network).
+ROS_DOMAIN_ID=7
