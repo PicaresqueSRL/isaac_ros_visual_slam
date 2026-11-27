@@ -59,7 +59,7 @@ in a later summary; its exit code is 1 when there are regressions.
 
 ```bash
 docker run --rm --gpus all --network none -v ~/bags:/bags:ro -v ~/slam_runs:/out \
-  -v $PWD/tools:/tools:ro pq_cuvslam:dev \
+  -v $PWD/tools:/tools:ro pq_cuvslam:17.0.1 \
   /tools/record_slam.sh /bags/<category>/<bag> /out/<profile>/<bag> <profile>
 ```
 

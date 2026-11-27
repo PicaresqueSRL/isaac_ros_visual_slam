@@ -406,6 +406,10 @@ This file records every change made to it. Update it with each change.
   (`console install`, git worktree in `.pq_console/`). Local settings (data folder, camera
   serial numbers) in `pq.conf`, not tracked (`pq.conf.example`). Replaces the live scripts
   kept on the Jetson outside the repository.
+- cuVSLAM versions: one image per version (`pq_cuvslam:<version>`, e.g. `pq_cuvslam:15.0.0`),
+  `--cuvslam <version>` on every command (short versions: latest release of 15, 16, 17),
+  `./pq setup --cuvslam 15,16,17` builds several, `./pq versions` lists them; default
+  `CUVSLAM` in `pq.conf`, otherwise the submodule. Replays named with the version.
 - Image: RealSense driver `realsense2_camera` from the Isaac ROS buildfarm (`WITH_REALSENSE`,
   default on): one image for the cameras, the recordings and the SLAM.
 - `tools/record_slam.sh`: profile `dual` (both VIO with the selector, real time).

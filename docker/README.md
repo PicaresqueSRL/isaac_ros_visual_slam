@@ -4,8 +4,9 @@ One Dockerfile for desktop PC and Jetson. It installs ROS 2 Lyrical on
 Ubuntu 24.04 and the RealSense driver, and builds the workspace (`pq_cuvslam`, the interfaces
 and cuVSLAM from the `cuvslam` submodule) with colcon.
 
-`./pq setup` (repository root) runs this build with the right options for the platform; this
-page is the reference of the options, for building by hand.
+`./pq setup` (repository root) runs this build with the right options for the platform and
+tags the image `pq_cuvslam:<cuVSLAM version>` (`./pq setup --cuvslam 15.0.0` sets
+`CUVSLAM_REF`); this page is the reference of the options, for building by hand.
 
 ## Build
 

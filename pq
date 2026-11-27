@@ -13,16 +13,20 @@ CONF=$REPO/pq.conf
 
 usage() {
   cat <<'EOF'
-Usage: ./pq <command> [arguments]
+Usage: ./pq <command> [arguments] [--cuvslam <version>]
+
+cuVSLAM version: every version is built into its own image (pq_cuvslam:<version>) and all the
+commands take --cuvslam <version> to choose it, e.g. --cuvslam 15. A short version picks the
+latest release (15: 15.0.1, 16: 16.0.0, 17: 17.0.1); 15.0.0 is the version of the Isaac ROS
+node. Default: CUVSLAM in pq.conf, otherwise the submodule (17.0.1). Supported: 15 to 17.
 
 Setup
-  setup [options]            build the image (submodule, platform detected), create pq.conf
-                             --cuvslam <tag>  cuVSLAM version (v15.0.0, v16.0.0, v17.0.1;
-                                              default: the submodule, 17.0.1)
-                             --tag <image>    image name (default IMAGE of pq.conf)
+  setup [options]            build the image of a cuVSLAM version (platform detected), create
+                             pq.conf; --cuvslam 15,16,17 builds several versions
                              --all-gpus       kernels for every NVIDIA GPU (PC; slower build)
                              --jobs <n>       parallel compile jobs
                              --no-cache       rebuild every step (no Docker cache)
+  versions                   cuVSLAM versions built on this machine, and available ones
   profiles                   list the camera profiles
 
 Live (cameras connected)
@@ -51,8 +55,9 @@ Other
   logs [cams|slam|record]    follow a log
   shell                      shell in the image (ROS 2 and the workspace sourced)
   test                       unit tests
-  console install|update|start|stop|logs|uninstall
-                             optional web app (branch console, checked out in .pq_console/)
+  console install|update|config|start|stop|logs|uninstall
+                             optional web app (branch console, checked out in .pq_console/);
+                             config: regenerate its configuration (e.g. after a new version)
 EOF
 }
 
@@ -61,11 +66,54 @@ info() { echo "pq: $*"; }
 
 is_jetson() { [ -f /etc/nv_tegra_release ] || grep -qi tegra /proc/device-tree/compatible 2>/dev/null; }
 
+# ---------------------------------------------------------------------------------------------
+# cuVSLAM versions. The tags come from the cuvslam submodule (fetched if missing).
+cuvslam_tags() {
+  [ -f "$REPO/cuvslam/CMakeLists.txt" ] || git -C "$REPO" submodule update --init cuvslam >&2
+  git -C "$REPO/cuvslam" tag -l 'v[0-9]*' | sort -V
+}
+
+# Version of the submodule: its tag (v17.0.1), or its commit.
+submodule_ref() {
+  [ -f "$REPO/cuvslam/CMakeLists.txt" ] || git -C "$REPO" submodule update --init cuvslam >&2
+  git -C "$REPO/cuvslam" describe --tags --exact-match HEAD 2>/dev/null \
+    || git -C "$REPO/cuvslam" rev-parse --short=12 HEAD
+}
+
+# Version argument -> git ref: 15 -> latest v15.x.y, 15.0 -> latest v15.0.y, 15.0.0 or v15.0.0
+# -> v15.0.0; anything else (commit, branch) unchanged; empty -> the submodule.
+cuvslam_ref() {
+  local v=${1#v} t
+  [ -n "$v" ] || { submodule_ref; return; }
+  if [[ $v =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+    t=$(cuvslam_tags | grep -E "^v${v//./\\.}(\.|$)" | tail -1)
+    [ -n "$t" ] || die "cuVSLAM $1: no such version (available: $(cuvslam_tags | tr '\n' ' '))"
+    echo "$t"
+  else
+    echo "$1"
+  fi
+}
+
+# Image of a version: pq_cuvslam:17.0.1 (commit refs: pq_cuvslam:<commit>).
+image_of() { local r=${1#v}; echo "pq_cuvslam:${r//[^A-Za-z0-9_.-]/_}"; }
+
+# Sets CUVSLAM_REF, VERSION and IMAGE from --cuvslam (or CUVSLAM of pq.conf).
+select_version() {
+  CUVSLAM_REF=$(cuvslam_ref "$1")
+  VERSION=${CUVSLAM_REF#v}
+  IMAGE=$(image_of "$CUVSLAM_REF")
+  if [[ $VERSION =~ ^[0-9]+\. ]] && ! [[ $VERSION =~ ^1[5-7]\. ]]; then
+    info "warning: cuVSLAM $VERSION is outside the supported versions (15 to 17)"
+  fi
+}
+
 load_conf() {
-  DATA_DIR=$HOME/pq_data; BAGS_DIR=; CAM1_SERIAL=; CAM2_SERIAL=; IMAGE=pq_cuvslam:dev
+  DATA_DIR=$HOME/pq_data; BAGS_DIR=; CAM1_SERIAL=; CAM2_SERIAL=; CUVSLAM=
   CAMERA_IMAGE=; CAMERA_PARAMS=; ROS_DOMAIN_ID=7
   # shellcheck disable=SC1090
   [ -f "$CONF" ] && source "$CONF"
+  [[ ${CUVSLAM_ARG:-} == *,* ]] && die "--cuvslam: one version only (several only with setup)"
+  select_version "${CUVSLAM_ARG:-$CUVSLAM}"
   CAMERA_IMAGE=${CAMERA_IMAGE:-$IMAGE}
   if is_jetson; then GPU=(--runtime nvidia); else GPU=(--gpus all); fi
   # Containers that talk to the cameras: host network and IPC, root (the Fast DDS shared memory
@@ -75,7 +123,11 @@ load_conf() {
 }
 
 need_image() {
-  docker image inspect "$1" > /dev/null 2>&1 || die "image $1 missing: run ./pq setup"
+  docker image inspect "$1" > /dev/null 2>&1 && return
+  if [ "$1" = "$IMAGE" ]; then
+    die "cuVSLAM $VERSION not built on this machine: ./pq setup --cuvslam $VERSION (./pq versions)"
+  fi
+  die "image $1 missing"
 }
 
 running() { docker ps -q --filter "name=^$1\$" | grep -q .; }
@@ -117,11 +169,9 @@ stamp() { date +%Y%m%d_%H%M%S; }
 
 # ---------------------------------------------------------------------------------------------
 cmd_setup() {
-  local ref="" tag="" all_gpus=0 jobs="" nocache=()
+  local all_gpus=0 jobs="" nocache=()
   while [ $# -gt 0 ]; do
     case $1 in
-      --cuvslam) ref=${2:?}; shift ;;
-      --tag) tag=${2:?}; shift ;;
       --all-gpus) all_gpus=1 ;;
       --jobs) jobs=${2:?}; shift ;;
       --no-cache) nocache=(--no-cache) ;;
@@ -135,13 +185,13 @@ cmd_setup() {
     cp "$REPO/pq.conf.example" "$CONF"
     info "created pq.conf: set CAM1_SERIAL and CAM2_SERIAL there for the live cameras"
   fi
-  load_conf
-  tag=${tag:-$IMAGE}
   info "cuVSLAM submodule"
   git -C "$REPO" submodule update --init cuvslam
+  local CUVSLAM_ARG_ALL=${CUVSLAM_ARG:-}
+  CUVSLAM_ARG=
+  load_conf
 
   local args=()
-  [ -n "$ref" ] && args+=(--build-arg "CUVSLAM_REF=$ref")
   if is_jetson; then
     # JetPack 7.2 (CUDA 13), Orin Nano: 8 GB without swap, 2 jobs; kernels for sm_87 only;
     # the CUDA forward compatibility packages crash the container toolkit.
@@ -168,14 +218,44 @@ cmd_setup() {
     local n=$(( $(nproc) < mem_jobs ? $(nproc) : mem_jobs ))
     args+=(--build-arg "BUILD_JOBS=${jobs:-$(( n > 0 ? n : 1 ))}")
   fi
-  info "building $tag (first time: about 20 min on a PC, 30-45 min on the Orin Nano)"
-  docker build "${nocache[@]}" -f "$REPO/docker/Dockerfile" -t "$tag" "${args[@]}" "$REPO"
   mkdir -p "$DATA_DIR"/{bags,runs,rerun,bench}
-  docker run --rm "${GPU[@]}" "$tag" bash -c \
-    'python3 -c "import sys" && ls /ws/install/pq_cuvslam/lib/pq_cuvslam > /dev/null' \
-    || die "image built but not usable"
-  info "done: image $tag, data in $DATA_DIR"
+  local v versions sub built=()
+  IFS=, read -r -a versions <<< "${CUVSLAM_ARG_ALL:-$CUVSLAM}"
+  [ ${#versions[@]} -gt 0 ] || versions=("")
+  sub=$(submodule_ref)
+  for v in "${versions[@]}"; do
+    select_version "$v"
+    local vargs=("${args[@]}")
+    # The submodule version is built from the submodule; other versions are downloaded from
+    # GitHub during the build (CUVSLAM_REF).
+    [ "$CUVSLAM_REF" = "$sub" ] || vargs+=(--build-arg "CUVSLAM_REF=$CUVSLAM_REF")
+    info "building cuVSLAM $VERSION -> $IMAGE (first time: about 20 min on a PC, 30-45 min" \
+         "on the Orin Nano; a further version: only the workspace is rebuilt)"
+    docker build "${nocache[@]}" -f "$REPO/docker/Dockerfile" -t "$IMAGE" "${vargs[@]}" "$REPO"
+    docker run --rm "${GPU[@]}" "$IMAGE" bash -c \
+      'ls /ws/install/pq_cuvslam/lib/pq_cuvslam > /dev/null' || die "$IMAGE built but not usable"
+    built+=("$VERSION")
+  done
+  info "done: cuVSLAM ${built[*]} (./pq versions), data in $DATA_DIR"
   info "next: ./pq replay <bag>  or, with the cameras, ./pq slam"
+}
+
+cmd_versions() {
+  local default; default=$(cuvslam_ref "$CUVSLAM")
+  printf '%-14s %-24s %-16s %s\n' VERSION IMAGE BUILT SIZE
+  local tag created size found=0
+  while read -r tag created size; do
+    [ -n "$tag" ] || continue
+    found=1
+    printf '%-14s %-24s %-16s %s%s\n' "$tag" "pq_cuvslam:$tag" "${created:0:16}" "$size" \
+      "$([ "v$tag" = "$default" ] || [ "$tag" = "$default" ] && echo '   (default)')"
+  done < <(docker images pq_cuvslam --format '{{.Tag}} {{.CreatedAt}} {{.Size}}' \
+             | awk '{print $1, $2"_"$3, $NF}' | sort -V)
+  [ $found = 1 ] || echo "(none built: ./pq setup)"
+  echo
+  echo "available: $(cuvslam_tags | grep -E '^v1[5-7]\.' | tr '\n' ' ')"
+  echo "default: ${default#v} (CUVSLAM in pq.conf; empty: the submodule)"
+  echo "build another one: ./pq setup --cuvslam <version>; use it: ./pq <command> --cuvslam <version>"
 }
 
 cmd_profiles() {
@@ -263,7 +343,7 @@ slam_start() {   # <profile arg> <name> <vis 0|1>
   docker run -d --name pq_slam "${GPU[@]}" "${ROSNET[@]}" -v "$DATA_DIR/runs:/out" \
     "${PROFILE_MOUNT[@]}" --entrypoint bash "$IMAGE" -c \
     "$(ros_cmd "exec ros2 launch pq_cuvslam $launch > /out/$name.log 2>&1")" > /dev/null
-  info "SLAM $profile -> $DATA_DIR/runs/$name (log $DATA_DIR/runs/$name.log)"
+  info "SLAM $profile, cuVSLAM $VERSION -> $DATA_DIR/runs/$name (log $DATA_DIR/runs/$name.log)"
 }
 
 cmd_slam() {
@@ -398,12 +478,12 @@ cmd_replay() {
   [ -f "$bag/metadata.yaml" ] || die "$bag is not a ros2 bag (no metadata.yaml)"
   resolve_profile "${profile:-cam2_stereo_imu}"
   [ "$PROFILE_ARG" = dual ] && [ $mode = offline ] && die "dual runs in real time only"
-  name=${name:-$(basename "$bag")_$(basename "${PROFILE_ARG%.yaml}")_$mode}
+  name=${name:-$(basename "$bag")_$(basename "${PROFILE_ARG%.yaml}")_${mode}_$VERSION}
   # Offline: every frame, at twice the recorded speed (the recorder of the output keeps up).
   [ -n "$rate" ] || rate=$([ $mode = offline ] && echo 2.0 || echo 1.0)
   need_image "$IMAGE"
   mkdir -p "$DATA_DIR/runs"
-  info "replay $(basename "$bag"), $PROFILE_ARG, $mode -> $DATA_DIR/runs/$name"
+  info "replay $(basename "$bag"), $PROFILE_ARG, $mode, cuVSLAM $VERSION -> $DATA_DIR/runs/$name"
   # No network: the replay cannot see (or disturb) the cameras or other replays.
   local tty=(); [ -t 0 ] && tty=(-it)
   docker run --rm "${tty[@]}" --init --network none --ipc private "${GPU[@]}" \
@@ -437,8 +517,9 @@ cmd_status() {
     docker exec pq_cams bash -c 'cat /tmp/emitter.log 2>/dev/null || echo "emitters: not set yet"'
   fi
   [ -d "$DATA_DIR" ] && df -h "$DATA_DIR" | awk -v d="$DATA_DIR" 'NR==2{print "disk " d ": " $4 " free of " $2}'
-  docker image inspect "$IMAGE" --format "image $IMAGE: {{.Created}}" 2>/dev/null \
-    || echo "image $IMAGE missing (./pq setup)"
+  docker image inspect "$IMAGE" > /dev/null 2>&1 \
+    && echo "cuVSLAM $VERSION ($IMAGE); built: $(docker images pq_cuvslam --format '{{.Tag}}' | sort -V | tr '\n' ' ')" \
+    || echo "cuVSLAM $VERSION not built (./pq setup --cuvslam $VERSION)"
 }
 
 cmd_logs() {
@@ -473,7 +554,7 @@ CONSOLE_DIR=$REPO/.pq_console
 console_config() {
   local gpu; if is_jetson; then gpu='[--runtime, nvidia]'; else gpu='[--gpus, all]'; fi
   local cfg=$CONSOLE_DIR/pq_console/config.yaml
-  [ -f "$cfg" ] && return
+  [ -f "$cfg" ] && [ "${1:-}" != force ] && return
   sed -e "s|^data_dir:.*|data_dir: $DATA_DIR|" \
       -e "s|^# bags_dir:.*|bags_dir: $DATA_DIR/bags|" \
       -e "s|^browse_roots:.*|browse_roots: [${BAGS_DIR}]|" \
@@ -486,7 +567,15 @@ console_config() {
       -e "0,/serial: \"000000000000\"/s//serial: \"$CAM1_SERIAL\"/" \
       -e "0,/serial: \"000000000000\"/s//serial: \"$CAM2_SERIAL\"/" \
       "$CONSOLE_DIR/pq_console/config.example.yaml" > "$cfg"
-  info "console configuration: $cfg (from pq.conf; edit it there)"
+  # cuVSLAM versions selectable in the console: the built images, the default first.
+  local t tags; tags=$(docker images pq_cuvslam --format '{{.Tag}}' | sort -rV)
+  if [ -n "$tags" ]; then
+    { echo "cuvslam_versions:"
+      echo "  \"$VERSION\": {image: $IMAGE}"
+      for t in $tags; do [ "$t" = "$VERSION" ] || echo "  \"$t\": {image: pq_cuvslam:$t}"; done
+    } >> "$cfg"
+  fi
+  info "console configuration: $cfg (from pq.conf; ./pq console config regenerates it)"
 }
 
 cmd_console() {
@@ -504,6 +593,11 @@ cmd_console() {
       git -C "$REPO" fetch -q origin console
       git -C "$CONSOLE_DIR" checkout -q --detach origin/console
       "$CONSOLE_DIR/pq_console/run.sh" restart ;;
+    config)
+      [ -d "$CONSOLE_DIR" ] || die "console not installed (./pq console install)"
+      local cfg=$CONSOLE_DIR/pq_console/config.yaml
+      [ -f "$cfg" ] && cp "$cfg" "$cfg.bak"
+      console_config force ;;
     start|stop|restart|logs)
       [ -d "$CONSOLE_DIR" ] || die "console not installed (./pq console install)"
       "$CONSOLE_DIR/pq_console/run.sh" "$sub" ;;
@@ -516,12 +610,24 @@ cmd_console() {
       fi
       git -C "$REPO" worktree remove --force "$CONSOLE_DIR"
       info "console removed" ;;
-    *) die "console: install|update|start|stop|restart|logs|uninstall" ;;
+    *) die "console: install|update|config|start|stop|restart|logs|uninstall" ;;
   esac
 }
 
 # ---------------------------------------------------------------------------------------------
 main() {
+  # --cuvslam <version> (or --cuvslam=<version>) anywhere on the command line.
+  CUVSLAM_ARG=
+  local rest=()
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --cuvslam) CUVSLAM_ARG=${2:?--cuvslam <version>}; shift ;;
+      --cuvslam=*) CUVSLAM_ARG=${1#--cuvslam=} ;;
+      *) rest+=("$1") ;;
+    esac
+    shift
+  done
+  set -- "${rest[@]+"${rest[@]}"}"
   local cmd=${1:-help}; shift || true
   case $cmd in
     help|-h|--help) usage; return ;;
@@ -530,6 +636,7 @@ main() {
   load_conf
   case $cmd in
     profiles) cmd_profiles ;;
+    versions) cmd_versions ;;
     cams) cmd_cams "$@" ;;
     slam) cmd_slam "$@" ;;
     record) cmd_record "$@" ;;

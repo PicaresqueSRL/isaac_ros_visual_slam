@@ -35,13 +35,12 @@ Then:
 ```bash
 git clone --recursive https://github.com/PicaresqueSRL/isaac_ros_visual_slam.git
 cd isaac_ros_visual_slam
-./pq setup          # builds the image pq_cuvslam:dev and creates pq.conf
+./pq setup          # builds cuVSLAM 17.0.1 into the image pq_cuvslam:17.0.1, creates pq.conf
 ```
 
 `./pq setup` detects the platform (PC or Jetson) and uses the right build options. The first
 build takes about 20 minutes on a PC and 30-45 minutes on the Orin Nano. Run it again after a
-`git pull` (`--no-cache` rebuilds every step from scratch). Other cuVSLAM versions: `./pq setup --cuvslam v15.0.0 --tag pq_cuvslam:cuvslam15`
-(then `IMAGE=pq_cuvslam:cuvslam15` in `pq.conf`).
+`git pull` (`--no-cache` rebuilds every step from scratch).
 
 Local settings (data folder, camera serial numbers) are in `pq.conf`. It is created from
 [pq.conf.example](pq.conf.example) and is not tracked by git.
@@ -49,6 +48,30 @@ Local settings (data folder, camera serial numbers) are in `pq.conf`. It is crea
 ## Use
 
 `./pq help` lists all the commands.
+
+### cuVSLAM versions
+
+The default is cuVSLAM 17.0.1 (the `cuvslam` submodule). Every version is built into its own
+image, `pq_cuvslam:<version>`, so several versions can be on the same machine, and every
+command takes `--cuvslam <version>` to choose one:
+
+```bash
+./pq setup                          # 17.0.1
+./pq setup --cuvslam 15.0.0         # also 15.0.0 (the version of the Isaac ROS node)
+./pq setup --cuvslam 15,16          # several at once
+./pq versions                       # built and available versions
+
+./pq replay building_in_108                      # 17.0.1
+./pq replay building_in_108 --cuvslam 15.0.0     # same bag with 15.0.0
+./pq slam cam1_stereo_imu --cuvslam 16
+```
+
+A short version is the latest release: `15` = 15.0.1 (same library as 15.0.0, only Python
+tool fixes), `16` = 16.0.0, `17` = 17.0.1. Supported: 15 to 17. To change the default, set
+`CUVSLAM=<version>` in `pq.conf`. After the first one, building a further version only
+rebuilds the workspace (about 5-10 minutes on a PC). The images share their system layers, so
+each further version takes about 1-2 GB of disk. A replay writes to
+`runs/<bag>_<profile>_<mode>_<version>`, so the runs of different versions sit side by side.
 
 ### SLAM on a recorded bag
 

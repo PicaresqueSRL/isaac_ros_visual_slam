@@ -13,11 +13,13 @@ BAGS_DIR=
 CAM1_SERIAL=
 CAM2_SERIAL=
 
-# Image built by `./pq setup`, used for the SLAM, the tools and (by default) the cameras.
-IMAGE=pq_cuvslam:dev
+# cuVSLAM version used by the commands (each built version is an image pq_cuvslam:<version>,
+# `./pq versions`): e.g. 15, 15.0.0, 16, 17. Empty: the submodule (17.0.1). One command can use
+# another version with --cuvslam <version>.
+CUVSLAM=
 
-# Image of the RealSense driver, recorder and player. Empty: IMAGE (realsense2_camera from the
-# Isaac ROS buildfarm). Alternative on the Jetson: the Isaac ROS realsense image,
+# Image of the RealSense driver, recorder and player. Empty: the image of the cuVSLAM version
+# (realsense2_camera from the Isaac ROS buildfarm). Alternative on the Jetson: the Isaac ROS realsense image,
 # nvcr.io/nvidia/isaac/ros:isaac_ros-realsense_<tag>-arm64-jetpack
 CAMERA_IMAGE=
 
