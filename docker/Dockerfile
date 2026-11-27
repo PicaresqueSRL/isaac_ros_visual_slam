@@ -60,6 +60,18 @@ RUN curl -fsSL https://isaac.download.nvidia.com/isaac-ros/repos.key \
         ros-lyrical-ros-base \
     && rm -rf /var/lib/apt/lists/*
 
+# RealSense driver (realsense2_camera) for the live D455 cameras (`./pq cams`), from the same
+# buildfarm: the same image drives the cameras, records and runs the SLAM. WITH_REALSENSE=false
+# leaves it out (bag replay only).
+ARG WITH_REALSENSE=true
+RUN if [ "${WITH_REALSENSE}" = true ]; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends \
+            ros-lyrical-realsense2-camera \
+            ros-lyrical-rosbag2-storage-mcap \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
+
 # Workspace: dependencies first (cached layer), then the sources.
 WORKDIR /ws
 COPY pq_cuvslam/package.xml src/isaac_ros_visual_slam/pq_cuvslam/package.xml

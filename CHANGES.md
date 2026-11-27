@@ -28,7 +28,7 @@ This file records every change made to it. Update it with each change.
 | Odometry health | none | per-frame check (speed, rotation against the gyroscope, landmarks; VIO speed against the odometry with cuVSLAM 17) and `visual_slam/tracking/odometry_guarded` without the rejected increments |
 | Cameras | one tracker per node | `dual_vio.launch.py`: VIO of cam1 and cam2 in parallel and an odometry selector (`visual_slam/tracking/odometry_fused`) |
 | Run output | topics only | also CSV + `run_info.json` (`run_output_dir`), format of `run_output.py` |
-| Build | Isaac ROS container | `docker/Dockerfile` (ROS 2 Lyrical, Ubuntu 24.04, CUDA 13) |
+| Build | Isaac ROS container | `docker/Dockerfile` (ROS 2 Lyrical, Ubuntu 24.04, CUDA 13), `./pq setup` |
 | Configuration | launch parameters + remappings + `static_transform_publisher` | YAML profiles (`profile`): cameras, topics, frames, IMU, depth, extrinsics with source, mode |
 | Modes | 0, 1, 2 | also 3 (Mono) and 4 (Multisensor, cuVSLAM >= 17 with cuNLS; optional depth and IMU) |
 | Launch files | Isaac Sim, RealSense, ZED, multi-camera, core | standalone node, `slam.launch.py profile:=...` |
@@ -394,6 +394,28 @@ This file records every change made to it. Update it with each change.
   `internal_corridor_104` (0.96 -> 0.81 deg), worse on `elevator_up_103` (0.72 -> 0.84 deg),
   equal elsewhere; the single VIOs, unaffected by the check, vary by up to 20 % between the two
   runs, so the difference is within the run-to-run variation. Hence off by default.
+
+### 2026-11-27
+
+**`pq` command line**
+- `./pq` at the repository root: build (`setup`, platform detected: Jetson JetPack 7.2 with 2
+  jobs and `sm_87`, PC with the architecture of its GPU), live cameras (`cams`), live SLAM
+  (`slam`, also `dual`), raw recording (`record`), session without connection (`walk`), bag
+  replay (`replay`, real time by default, `--offline`; isolated, no network), benchmark
+  (`bench`), `status`, `shell`, `test`, and the optional web app of the `console` branch
+  (`console install`, git worktree in `.pq_console/`). Local settings (data folder, camera
+  serial numbers) in `pq.conf`, not tracked (`pq.conf.example`). Replaces the live scripts
+  kept on the Jetson outside the repository.
+- cuVSLAM versions: one image per version (`pq_cuvslam:<version>`, e.g. `pq_cuvslam:15.0.0`),
+  `--cuvslam <version>` on every command (short versions: latest release of 15, 16, 17),
+  `./pq setup --cuvslam 15,16,17` builds several, `./pq versions` lists them; default
+  `CUVSLAM` in `pq.conf`, otherwise the submodule. Replays named with the version.
+- Image: RealSense driver `realsense2_camera` from the Isaac ROS buildfarm (`WITH_REALSENSE`,
+  default on): one image for the cameras, the recordings and the SLAM.
+- `tools/record_slam.sh`: profile `dual` (both VIO with the selector, real time).
+- `README.md` rewritten for this project (it was the Isaac ROS one).
+- Web console: `BROWSE` in `pq.conf` (default home, `/media`, `/mnt`) sets the folders its
+  Bags page can browse, read only.
 
 ## Notes
 
