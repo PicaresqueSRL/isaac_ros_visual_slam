@@ -128,6 +128,10 @@ you want it:
 # from your computer: ssh -N -L 8080:127.0.0.1:8080 <user>@<jetson>, then http://localhost:8080
 ```
 
+The Bags page browses the data folder (recordings, runs of `./pq replay` too) and, read only,
+the folders of `BROWSE` in `pq.conf` (default: home, `/media`, `/mnt`). After changing
+`pq.conf`: `./pq console config`.
+
 ## Results
 
 All the results are in `DATA_DIR` (default `~/pq_data`):

@@ -8,6 +8,10 @@ DATA_DIR=$HOME/pq_data
 # More recorded bags, read only (replay and benchmark find bags here too). Empty: DATA_DIR/bags.
 BAGS_DIR=
 
+# Folders the web console can browse, read only (besides DATA_DIR), separated by spaces;
+# missing ones are skipped. After a change: ./pq console config.
+BROWSE="$HOME /media /mnt"
+
 # RealSense serial numbers of the two D455 (label serial, `./pq cams list`). cam1 looks at the
 # floor, cam2 forward.
 CAM1_SERIAL=

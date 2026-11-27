@@ -414,6 +414,8 @@ This file records every change made to it. Update it with each change.
   default on): one image for the cameras, the recordings and the SLAM.
 - `tools/record_slam.sh`: profile `dual` (both VIO with the selector, real time).
 - `README.md` rewritten for this project (it was the Isaac ROS one).
+- Web console: `BROWSE` in `pq.conf` (default home, `/media`, `/mnt`) sets the folders its
+  Bags page can browse, read only.
 
 ## Notes
 

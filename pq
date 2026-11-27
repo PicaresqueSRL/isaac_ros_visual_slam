@@ -109,7 +109,7 @@ select_version() {
 
 load_conf() {
   DATA_DIR=$HOME/pq_data; BAGS_DIR=; CAM1_SERIAL=; CAM2_SERIAL=; CUVSLAM=
-  CAMERA_IMAGE=; CAMERA_PARAMS=; ROS_DOMAIN_ID=7
+  CAMERA_IMAGE=; CAMERA_PARAMS=; ROS_DOMAIN_ID=7; BROWSE="$HOME /media /mnt"
   # shellcheck disable=SC1090
   [ -f "$CONF" ] && source "$CONF"
   [[ ${CUVSLAM_ARG:-} == *,* ]] && die "--cuvslam: one version only (several only with setup)"
@@ -555,9 +555,12 @@ console_config() {
   local gpu; if is_jetson; then gpu='[--runtime, nvidia]'; else gpu='[--gpus, all]'; fi
   local cfg=$CONSOLE_DIR/pq_console/config.yaml
   [ -f "$cfg" ] && [ "${1:-}" != force ] && return
+  # Folders the console can browse (read only): BAGS_DIR and BROWSE, the existing ones.
+  local d roots=
+  for d in $BAGS_DIR $BROWSE; do [ -d "$d" ] && roots+="${roots:+, }\"$d\""; done
   sed -e "s|^data_dir:.*|data_dir: $DATA_DIR|" \
       -e "s|^# bags_dir:.*|bags_dir: $DATA_DIR/bags|" \
-      -e "s|^browse_roots:.*|browse_roots: [${BAGS_DIR}]|" \
+      -e "s|^browse_roots:.*|browse_roots: [$roots]|" \
       -e "s|^ros_domain_id:.*|ros_domain_id: $ROS_DOMAIN_ID|" \
       -e "s|^camera_image:.*|camera_image: $CAMERA_IMAGE|" \
       -e "s|^slam_image:.*|slam_image: $IMAGE|" \
