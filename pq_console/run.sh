@@ -38,7 +38,8 @@ VOLS=(); DOMAIN=7; DDS=LARGE_DATA
 while read -r kind path; do
   case $kind in
     rw) mkdir -p "$path"; VOLS+=(-v "$path:$path") ;;
-    ro) [ -d "$path" ] && VOLS+=(-v "$path:$path:ro") ;;
+    # rslave: drives mounted later under the folder (e.g. /media) are seen too.
+    ro) [ -d "$path" ] && VOLS+=(-v "$path:$path:ro,rslave") ;;
     install) VOLS+=(-v "$path:/ws/install:ro") ;;
     domain) DOMAIN=$path ;;
     dds) DDS=$path ;;

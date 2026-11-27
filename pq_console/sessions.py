@@ -638,12 +638,26 @@ class Sessions:
         r['rrd'] = rrd if os.path.isfile(rrd) else ''
         return r
 
+    def any_summary(self, path):
+        """Run of the console (output in the folder) or of ./pq replay (<name>/run, <name>/rerun)."""
+        r = self.run_summary(path) or self.dual_summary(path)
+        if r:
+            return r
+        out = os.path.join(path, 'run')
+        r = self.run_summary(out) or self.dual_summary(out)
+        if not r:
+            return None
+        r['name'], r['time'] = os.path.basename(path), os.path.getmtime(out)
+        mcaps = sorted(glob.glob(os.path.join(path, 'rerun', '*.mcap')))
+        r['rrd'] = mcaps[0] if mcaps else ''
+        return r
+
     def runs(self):
         out = []
         names = set()
         for path in glob.glob(os.path.join(self.c.runs_dir, '*')):
             if os.path.isdir(path):
-                r = self.run_summary(path) or self.dual_summary(path)
+                r = self.any_summary(path)
                 if r:
                     r['size'] = self.run_size(r['name'])
                     out.append(r)

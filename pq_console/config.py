@@ -70,9 +70,9 @@ class Config:
 
     @property
     def roots(self):
-        """Folders the console may browse: recordings, SLAM output, configured roots."""
+        """Folders the console may browse: recordings, SLAM output, runs, configured roots."""
         out = []
-        for r in [self.bags_dir, self.slam_bags_dir] + list(self.browse_roots):
+        for r in [self.bags_dir, self.slam_bags_dir, self.runs_dir] + list(self.browse_roots):
             if r and r not in out:
                 out.append(r)
         return out

@@ -3,7 +3,7 @@
 listen: 127.0.0.1:8080          # reached through an ssh tunnel (connect.sh)
 data_dir: /home/user/workspaces/pq_cuvslam/live   # bags/, runs/, rerun/
 # bags_dir: /home/user/bags     # recordings elsewhere (default data_dir/bags)
-browse_roots: []                 # more folders with bags, read only (e.g. [/home/user/bags])
+browse_roots: []                 # more folders to browse, read only (e.g. [/home/user, /media])
 ros_domain_id: 7
 dds_transports: LARGE_DATA       # Fast DDS: large images between containers
 # RealSense driver, recorder and player (Jetson: the Isaac ROS realsense image; PC:
